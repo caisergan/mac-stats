@@ -47,3 +47,4 @@ docs/reddit-post-macosapps.md
 
 # Compiled localization output (built from Localizations/Localizable.xcstrings)
 *.lproj/
+.worktrees/
