@@ -79,6 +79,16 @@ struct TrendChart: View {
     /// nearest point of any series.
     var scrubbable: Bool = false
 
+    /// Report the scrubbed point (nil when the pointer leaves) so a caller can
+    /// render its own per-point detail. Fires only when the scrubbed point
+    /// actually changes.
+    var scrubReporting: ((TrendScrubPoint?) -> Void)? = nil
+
+    /// Whether the built-in floating read-out appears beside the marker.
+    /// Callers that render their own read-out via `scrubReporting` set this to
+    /// false; the marker rule and dot stay.
+    var scrubReadout: Bool = true
+
     /// Width reserved for the Y axis labels. The default fits short tick
     /// strings ("85%", "1.2 GB"); charts whose ticks format as byte rates or
     /// large sizes ("38.4 MB/s", "460.4 GB") pass a wider gutter, because the
@@ -124,7 +134,10 @@ struct TrendChart: View {
                     .allowsHitTesting(false)
             }
             if scrubbable {
-                TrendScrubOverlay(geometry: geometry, point: scrub, yFormat: yFormat) {
+                TrendScrubOverlay(
+                    geometry: geometry, point: scrub, yFormat: yFormat,
+                    showsReadout: scrubReadout
+                ) {
                     scrubFraction = $0
                 }
             }
@@ -133,6 +146,7 @@ struct TrendChart: View {
         // value describe the series, and without this each layer and axis label
         // repeated them to VoiceOver.
         .accessibilityElement(children: .ignore)
+        .onChange(of: scrub) { _, point in scrubReporting?(point) }
     }
 
     // MARK: - Helpers
@@ -631,6 +645,7 @@ private struct TrendScrubOverlay: View {
     let geometry: TrendChartGeometry
     let point: TrendScrubPoint?
     let yFormat: (Double) -> String
+    let showsReadout: Bool
     let onScrub: (CGFloat?) -> Void
 
     var body: some View {
@@ -653,7 +668,7 @@ private struct TrendScrubOverlay: View {
                             .onChanged { onScrub(Self.fraction(of: $0.location.x, in: plot)) }
                             .onEnded { _ in onScrub(nil) }
                     )
-                if let point {
+                if let point, showsReadout {
                     let xx = plot.minX + point.fraction * plot.width
                     readout(point)
                         .fixedSize()

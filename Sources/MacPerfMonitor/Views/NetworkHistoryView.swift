@@ -1,3 +1,4 @@
+import Combine
 import MacPerfMonitorCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,6 +11,7 @@ import UniformTypeIdentifiers
 struct NetworkHistoryPanel: View {
     @EnvironmentObject private var model: SamplerModel
     @EnvironmentObject private var appMode: AppModeManager
+    @EnvironmentObject private var appState: AppState
     @AppStorage(SamplerModel.perAppNetworkDefaultsKey) private var trackPerApp = true
     @AppStorage(SamplerModel.connectionHistoryDefaultsKey) private var trackConnections =
         false
@@ -28,6 +30,12 @@ struct NetworkHistoryPanel: View {
     /// Lazily opened when the geo database is installed; nil otherwise, which
     /// is what hides the country column.
     @State private var geo: GeoLocator?
+
+    /// The auto-refresh timer, recreated on appear. Matches the per-app
+    /// sampling cadence (nettop produces a snapshot about every 5 s), so the
+    /// panel tracks live traffic while it is on screen.
+    static let refreshInterval: TimeInterval = 5
+    @State private var refreshCancellable: AnyCancellable?
 
     private static let palette: [Color] = [
         .blue, .purple, .pink, .orange, .yellow, .mint, .indigo, .teal,
@@ -56,7 +64,9 @@ struct NetworkHistoryPanel: View {
         .onAppear {
             if geo == nil { geo = GeoLocator(url: GeoLocator.defaultDatabaseURL()) }
             reload()
+            startAutoRefresh()
         }
+        .onDisappear { stopAutoRefresh() }
         .onChange(of: period) { _, _ in reload() }
         .onChange(of: trackPerApp) { _, _ in reload() }
         .onChange(of: trackConnections) { _, _ in reload() }
@@ -139,10 +149,14 @@ struct NetworkHistoryPanel: View {
         }
     }
 
+    /// The scrubbed chart point (nil when the pointer is off the plot). The
+    /// chart reports it via `scrubReporting`; the read-out card renders it.
+    @State private var scrubPoint: TrendScrubPoint?
+
     @ViewBuilder private var chartView: some View {
         switch chartMode {
         case .total:
-            TrendChart(
+            scrubChart(
                 series: [
                     TrendSeries(
                         points: totalPoints(.download), color: NetworkStyle.download,
@@ -151,13 +165,9 @@ struct NetworkHistoryPanel: View {
                         points: totalPoints(.upload), color: NetworkStyle.upload,
                         lineWidth: 1.8),
                 ],
-                yDomain: yDomain(displayedSeries.flatMap { [$0.downloaded, $0.uploaded] }),
-                yFormat: { ByteFormat.string(UInt64(max(0, $0))) },
-                showsTimeAxis: true,
-                leftGutter: 56
+                values: displayedSeries.flatMap { [$0.downloaded, $0.uploaded] },
+                accessibility: "Network history"
             )
-            .accessibilityLabel("Network history")
-            .accessibilityValue(totalsCaption)
         case .perApp:
             if !trackPerApp {
                 emptyHint(
@@ -166,17 +176,189 @@ struct NetworkHistoryPanel: View {
             } else if displayedApps.isEmpty {
                 emptyHint("No app network history recorded for this period yet.")
             } else {
-                TrendChart(
+                scrubChart(
                     series: perAppTrendSeries,
-                    yDomain: yDomain(
-                        perAppTrendSeries.flatMap { series in series.points.map { $0.value } }),
-                    yFormat: { ByteFormat.string(UInt64(max(0, $0))) },
-                    showsTimeAxis: true,
-                    leftGutter: 56
+                    values: perAppTrendSeries.flatMap { series in
+                        series.points.map { $0.value }
+                    },
+                    accessibility: "Per-app network history"
                 )
-                .accessibilityLabel("Per-app network history")
             }
         }
+    }
+
+    /// The history chart with scrubbing: the built-in TrendChart marker stays,
+    /// its single-value read-out is replaced by this panel's read-out, which
+    /// shows the bucket's time and usage (both directions, or each app's
+    /// contribution in per-app mode).
+    private func scrubChart(
+        series: [TrendSeries], values: [Double], accessibility: String
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            TrendChart(
+                series: series,
+                yDomain: yDomain(values),
+                yFormat: { ByteFormat.string(UInt64(max(0, $0))) },
+                showsTimeAxis: true,
+                scrubbable: true,
+                scrubReporting: { scrubPoint = $0 },
+                scrubReadout: false,
+                leftGutter: 56
+            )
+            .accessibilityLabel(accessibility)
+            .accessibilityValue(totalsCaption)
+            scrubReadout
+        }
+    }
+
+    /// Floating read-out beside the scrub marker, mirroring TrendChart's own
+    /// geometry so the card tracks the marker exactly.
+    @ViewBuilder private var scrubReadout: some View {
+        GeometryReader { geo in
+            let plot = TrendChartGeometry(leftGutter: 56, showsTimeAxis: true).plotRect(
+                in: geo.size)
+            if let scrubPoint, chartHasData {
+                let xx = plot.minX + scrubPoint.fraction * plot.width
+                readoutCard(for: scrubPoint)
+                    .fixedSize()
+                    .allowsHitTesting(false)
+                    .position(
+                        x: min(max(xx, plot.minX + 90), plot.maxX - 90),
+                        y: plot.minY + 18)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var chartHasData: Bool {
+        chartMode == .total ? !displayedSeries.isEmpty : !perAppTrendSeries.isEmpty
+    }
+
+    private func readoutCard(for point: TrendScrubPoint) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(scrubTimeLabel(point.date))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            switch chartMode {
+            case .total:
+                let bucket = nearestBucket(to: point.date, in: displayedSeries)
+                HStack(spacing: 12) {
+                    amount(bucket?.downloaded ?? 0, tint: NetworkStyle.download)
+                    amount(bucket?.uploaded ?? 0, tint: NetworkStyle.upload)
+                }
+            case .perApp:
+                let rows = scrubAppRows(at: point.date)
+                if rows.isEmpty {
+                    Text("No traffic at this time.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(rows, id: \.name) { row in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(row.color)
+                                .frame(width: 6, height: 6)
+                            Text(row.name)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: 130, alignment: .leading)
+                            Text(ByteFormat.string(row.downloaded))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(NetworkStyle.download.opacity(0.9))
+                                .frame(width: 78, alignment: .trailing)
+                            Text(ByteFormat.string(row.uploaded))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(NetworkStyle.upload.opacity(0.9))
+                                .frame(width: 78, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.secondary.opacity(0.15))
+        )
+    }
+
+    private struct ScrubAppRow {
+        var name: String
+        var color: Color
+        var downloaded: UInt64
+        var uploaded: UInt64
+    }
+
+    private func amount(_ bytes: Double, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: tint == NetworkStyle.download ? "arrow.down" : "arrow.up")
+                .font(.caption2)
+                .foregroundStyle(tint)
+            Text(ByteFormat.string(UInt64(max(0, bytes))))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.primary)
+        }
+    }
+
+    /// The nearest bucket at or before the scrubbed time, within the bucket
+    /// width; nil when the pointer sits on an empty stretch of the plot.
+    private func nearestBucket(
+        to date: Date, in points: [NetworkUsagePoint]
+    ) -> NetworkUsagePoint? {
+        guard !points.isEmpty else { return nil }
+        let target = date.timeIntervalSinceReferenceDate
+        var best: NetworkUsagePoint?
+        var bestDelta = Double.greatestFiniteMagnitude
+        for point in points {
+            let delta = abs(point.date.timeIntervalSinceReferenceDate - target)
+            if delta < bestDelta {
+                bestDelta = delta
+                best = point
+            }
+        }
+        guard let best, bestDelta < period.seriesBucketWidth / 2 else { return nil }
+        return best
+    }
+
+    /// Each top app's usage at the scrubbed bucket, in the chart's color
+    /// order, limited to apps with any traffic at that instant.
+    private func scrubAppRows(at date: Date) -> [ScrubAppRow] {
+        var rows: [ScrubAppRow] = []
+        for (index, app) in displayedApps.prefix(6).enumerated() {
+            guard let series = appSeries[app.id] else { continue }
+            guard let bucket = nearestBucket(to: date, in: series) else { continue }
+            let downloaded = UInt64(max(0, bucket.downloaded))
+            let uploaded = UInt64(max(0, bucket.uploaded))
+            guard downloaded > 0 || uploaded > 0 else { continue }
+            rows.append(
+                ScrubAppRow(
+                    name: app.displayName,
+                    color: Self.palette[index % Self.palette.count],
+                    downloaded: downloaded, uploaded: uploaded))
+        }
+        return rows
+    }
+
+    /// Bucket start label for the period: time for intra-day buckets, a date
+    /// for day-wide (or longer) buckets.
+    private func scrubTimeLabel(_ date: Date) -> String {
+        let style: Date.FormatStyle
+        switch period {
+        case .lastHour:
+            style = .dateTime.hour().minute().second()
+        case .oneDay:
+            style = .dateTime.hour().minute()
+        case .sevenDays:
+            style = .dateTime.weekday(.abbreviated).hour().minute()
+        case .thirtyDays:
+            style = .dateTime.month(.abbreviated).day().hour().minute()
+        case .all:
+            style = .dateTime.month(.abbreviated).day()
+        }
+        return date.formatted(style)
     }
 
     private var displayedSeries: [NetworkUsagePoint] {
@@ -360,10 +542,10 @@ struct NetworkHistoryPanel: View {
     private func reload(force: Bool = false) {
         model.loadNetworkHistory(period, forceReload: force) { fresh in
             bundle = fresh
-            // Refresh the per-app series alongside the bundle; keep the
-            // expanded row's series so the detail chart does not flicker.
-            appSeries = appSeries.filter { expandedApp == $0.key }
-            for app in fresh.apps.prefix(6) where appSeries[app.id] == nil {
+            // Refresh the top apps' series with every reload so the per-app
+            // chart and the scrub read-out track live traffic; the queries are
+            // small aggregate reads.
+            for app in fresh.apps.prefix(6) {
                 loadAppSeries(app)
             }
         }
@@ -374,6 +556,26 @@ struct NetworkHistoryPanel: View {
         } else {
             interfaceSeries = []
         }
+    }
+
+    /// Refresh the whole panel every `refreshInterval` seconds while the main
+    /// window is visible. The panel disappears with the tab or window, which
+    /// stops the timer; the visibility gate additionally covers a tab that the
+    /// app keeps alive underneath another one.
+    private func startAutoRefresh() {
+        stopAutoRefresh()
+        refreshCancellable =
+            Timer.publish(every: Self.refreshInterval, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                guard appState.mainWindowVisible else { return }
+                reload()
+            }
+    }
+
+    private func stopAutoRefresh() {
+        refreshCancellable?.cancel()
+        refreshCancellable = nil
     }
 
     private func exportCSV() {
@@ -447,6 +649,7 @@ private struct AppUsageRow: View {
 private struct AppDetail: View {
     @EnvironmentObject private var model: SamplerModel
     @EnvironmentObject private var appMode: AppModeManager
+    @EnvironmentObject private var appState: AppState
     let app: NetworkAppUsage
     @State private var series: [NetworkUsagePoint] = []
     @State private var selectedPeriod: NetworkHistoryPeriod = .oneDay
@@ -480,6 +683,13 @@ private struct AppDetail: View {
         .padding(.leading, 34)
         .onAppear { load() }
         .onChange(of: selectedPeriod) { _, _ in load() }
+        .onReceive(
+            Timer.publish(every: NetworkHistoryPanel.refreshInterval, on: .main, in: .common)
+                .autoconnect()
+        ) { _ in
+            guard appState.mainWindowVisible else { return }
+            load()
+        }
     }
 
     private func load() {
