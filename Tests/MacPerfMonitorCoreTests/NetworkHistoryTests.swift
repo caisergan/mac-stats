@@ -178,6 +178,28 @@ final class NetworkHistoryTests: XCTestCase {
         XCTAssertEqual(appSeries[0].downloaded, 4_000, accuracy: 1)
     }
 
+    func testDeadProcessUsageDoesNotGrowWithTime() throws {
+        // A process that stopped transferring (its last raw row carries its
+        // final rate) must not accrue phantom bytes as the query instant moves
+        // on: the trailing row's dt is bounded by the process's last sighting,
+        // not by `now`. The original code extrapolated the last rate to now and
+        // the per-app figure climbed ~rate x elapsed forever.
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(0),
+                processes: [processTick(0, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        // The process vanishes: no further rows, whatever the query instant.
+        let early = try store.networkAppUsage(.lastHour, now: anchor.addingTimeInterval(60))
+        let later = try store.networkAppUsage(.lastHour, now: anchor.addingTimeInterval(600))
+        XCTAssertEqual(early.count, 1)
+        XCTAssertEqual(later.count, 1)
+        XCTAssertEqual(early[0].downloaded, later[0].downloaded)
+        // Bounded: one row at 1000 B/s, dt capped by last_seen + 15 s.
+        XCTAssertLessThanOrEqual(later[0].downloaded, 15_000)
+        XCTAssertGreaterThan(later[0].downloaded, 0)
+    }
+
     func testTotalsCountTheHourBucketTheWindowEdgeLandsIn() throws {
         // Data 30 days back, inside one hour bucket that straddles the window's
         // left edge: eleven samples BEFORE the edge (+600..+1200) and eleven

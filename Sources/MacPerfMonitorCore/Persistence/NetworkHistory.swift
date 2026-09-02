@@ -246,13 +246,14 @@ extension SampleStore {
                                CAST(SUM(net_in * dt) AS INTEGER) AS din,
                                CAST(SUM(net_out * dt) AS INTEGER) AS dout
                         FROM (
-                            SELECT process_id, net_in, net_out,
+                            SELECT ps.process_id, ps.net_in, ps.net_out,
                                    COALESCE(
-                                     LEAD(timestamp) OVER (
-                                       PARTITION BY process_id ORDER BY timestamp),
-                                     ?) - timestamp AS dt
-                            FROM process_samples
-                            WHERE timestamp >= ?
+                                     LEAD(ps.timestamp) OVER (
+                                       PARTITION BY ps.process_id ORDER BY ps.timestamp),
+                                     MIN(?, p.last_seen + 15)) - ps.timestamp AS dt
+                            FROM process_samples ps
+                            JOIN processes p ON p.id = ps.process_id
+                            WHERE ps.timestamp >= ?
                         ) s
                         JOIN processes p ON p.id = s.process_id
                         GROUP BY p.executable_path, p.bundle_id
@@ -310,7 +311,7 @@ extension SampleStore {
                                    COALESCE(
                                      LEAD(ps.timestamp) OVER (
                                        PARTITION BY ps.process_id ORDER BY ps.timestamp),
-                                     ?) - ps.timestamp AS dt
+                                     MIN(?, p.last_seen + 15)) - ps.timestamp AS dt
                             FROM process_samples ps
                             JOIN processes p ON p.id = ps.process_id
                             WHERE ps.timestamp >= ? AND \(Self.appFilter(
