@@ -539,7 +539,7 @@ private struct ShareRow: View {
                 }
                 Text(name).font(.caption).lineLimit(1).truncationMode(.middle)
                 Spacer()
-                Text("\(Int(((downloadedShare + uploadedShare) * 100).rounded()))%")
+                Text("\(Int((combinedShare * 100).rounded()))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -547,10 +547,10 @@ private struct ShareRow: View {
                 HStack(spacing: 1) {
                     Capsule()
                         .fill(NetworkStyle.download)
-                        .frame(width: max(2, proxy.size.width * downloadedShare))
+                        .frame(width: max(2, proxy.size.width * normalizedShare(downloadedShare)))
                     Capsule()
                         .fill(NetworkStyle.upload)
-                        .frame(width: max(0, proxy.size.width * uploadedShare))
+                        .frame(width: max(0, proxy.size.width * normalizedShare(uploadedShare)))
                     Spacer(minLength: 0)
                 }
             }
@@ -560,6 +560,19 @@ private struct ShareRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+
+    /// The row's overall share of traffic, capped at 100%: per-app sums can
+    /// exceed the system totals (nettop counts interfaces the system reader
+    /// excludes, such as tunnels), and the percentage must never read past
+    /// 100% or the bar overflow the row.
+    private var combinedShare: Double { min(1, downloadedShare + uploadedShare) }
+
+    /// Each segment as a fraction of the row width, so the two segments always
+    /// fit side by side no matter how the raw shares add up.
+    private func normalizedShare(_ share: Double) -> CGFloat {
+        guard combinedShare > 0 else { return 0 }
+        return CGFloat(min(1, share / combinedShare))
     }
 }
 

@@ -29,9 +29,11 @@ final class NetworkHistoryTests: XCTestCase {
     }
 
     private func systemTick(
-        _ offset: TimeInterval, down: Double = 1_000_000, up: Double = 500_000
+        _ offset: TimeInterval, down: Double = 1_000_000, up: Double = 500_000,
+        from base: Date? = nil
     ) -> SystemSample {
-        var sample = Make.system(timestamp: anchor.addingTimeInterval(offset), pressurePercent: 5)
+        var sample = Make.system(
+            timestamp: (base ?? anchor).addingTimeInterval(offset), pressurePercent: 5)
         sample.networkInBytesPerSec = down
         sample.networkOutBytesPerSec = up
         return sample
@@ -100,10 +102,11 @@ final class NetworkHistoryTests: XCTestCase {
         try store.insert(systemSample: systemTick(122))
 
         let totals = try store.networkBytesTransferred(.oneDay, now: anchor.addingTimeInterval(124))
-        // Rolled bucket 60 MB, plus 2 s of raw remainder at 1 MB/s. The last
-        // raw row's dt falls back to +1 s, so 2.999... s in total.
-        XCTAssertEqual(totals.downloaded, 60_000_000 + 3_000_000, accuracy: 1_000_001)
-        XCTAssertEqual(totals.uploaded, 30_000_000 + 1_500_000, accuracy: 1_000_001)
+        // Rolled bucket 60 MB, plus the raw remainder: the row at +120 s spans
+        // to the next row (+122), the trailing row spans to the query instant
+        // (+124), so exactly 4 s at 1 MB/s.
+        XCTAssertEqual(totals.downloaded, 60_000_000 + 4_000_000, accuracy: 1)
+        XCTAssertEqual(totals.uploaded, 30_000_000 + 2_000_000, accuracy: 1)
     }
 
     func testPerAppUsageGroupsByExecutableAcrossLaunches() throws {
@@ -139,6 +142,70 @@ final class NetworkHistoryTests: XCTestCase {
             executablePath: "/usr/local/bin/worker", bundleID: nil, .oneDay, now: now)
         XCTAssertEqual(series.count, 1)
         XCTAssertEqual(series[0].downloaded, 120_000, accuracy: 1)
+    }
+
+    func testRawTierHourQueriesReturnData() throws {
+        // The Hour period reads the raw tier, whose trailing-dt query binds
+        // two placeholders; the until/since order was once swapped, which
+        // filtered out every row. Lock the exact spans: rows at +0 and +2 s,
+        // query instant +4 s.
+        try store.insert(systemSample: systemTick(0))
+        try store.insert(systemSample: systemTick(2))
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(0),
+                processes: [processTick(0, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(2),
+                processes: [processTick(2, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        let now = anchor.addingTimeInterval(4)
+
+        let series = try store.networkUsageSeries(.lastHour, now: now)
+        XCTAssertEqual(series.count, 1)
+        // systemTick's default rate is 1 MB/s down, spanning 4 s in total.
+        XCTAssertEqual(series[0].downloaded, 4_000_000, accuracy: 1)
+
+        let apps = try store.networkAppUsage(.lastHour, now: now)
+        XCTAssertEqual(apps.count, 1)
+        XCTAssertEqual(apps[0].downloaded, 4_000, accuracy: 1)
+
+        let appSeries = try store.networkAppUsageSeries(
+            executablePath: "/usr/local/bin/worker", bundleID: nil, .lastHour, now: now)
+        XCTAssertEqual(appSeries.count, 1)
+        XCTAssertEqual(appSeries[0].downloaded, 4_000, accuracy: 1)
+    }
+
+    func testTotalsCountTheHourBucketTheWindowEdgeLandsIn() throws {
+        // Data 30 days back, inside one hour bucket that straddles the window's
+        // left edge: eleven samples BEFORE the edge (+600..+1200) and eleven
+        // AFTER it (+2400..+3000), one per minute. The totals must count only
+        // the after-edge traffic; a naive `bucket >= since` drops the whole
+        // hour bucket the edge lands in (the original bug lost ~52 minutes).
+        let base = anchor.addingTimeInterval(-30 * 86_400)  // hour-aligned
+        for offset in stride(from: 600.0, through: 1200.0, by: 60.0) {
+            try store.insert(systemSample: systemTick(offset, from: base))
+        }
+        for offset in stride(from: 2400.0, through: 3000.0, by: 60.0) {
+            try store.insert(systemSample: systemTick(offset, from: base))
+        }
+        // Roll raw to minute and minute to hour without trimming the 30-day-old
+        // tiers (the default retention would drop them in the same pass).
+        try Retention.run(
+            store.databasePool, now: base.addingTimeInterval(4200),
+            policy: RetentionPolicy(
+                rawWindow: 40 * 86_400, minuteWindow: 40 * 86_400,
+                hourWindow: 90 * 86_400))
+
+        // Window edge sits at +1800, mid-hour-bucket; the query runs "now" at
+        // +30 days so the 30 d period starts exactly there.
+        let totals = try store.networkBytesTransferred(
+            .thirtyDays, now: anchor.addingTimeInterval(1800))
+        // 11 minutes x 60 s x 1 MB/s, before-edge traffic excluded.
+        XCTAssertEqual(totals.downloaded, 660_000_000)
+        XCTAssertEqual(totals.uploaded, 330_000_000)
     }
 
     func testClearNetworkHistoryZeroesOnlyNetworkSums() throws {

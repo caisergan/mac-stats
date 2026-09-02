@@ -131,12 +131,18 @@ extension SampleStore {
             let rawSince = max(since, minuteWatermark)
             var downloaded =
                 try Double.fetchOne(
-                    db, sql: Self.rawBytesSumSQL(column: "net_in", timeColumn: "timestamp"),
-                    arguments: [rawSince.timeIntervalSince1970]) ?? 0
+                    db,
+                    sql: Self.rawBytesSumSQL(
+                        column: "net_in", timeColumn: "timestamp",
+                        until: now.timeIntervalSince1970),
+                    arguments: [now.timeIntervalSince1970, rawSince.timeIntervalSince1970]) ?? 0
             var uploaded =
                 try Double.fetchOne(
-                    db, sql: Self.rawBytesSumSQL(column: "net_out", timeColumn: "timestamp"),
-                    arguments: [rawSince.timeIntervalSince1970]) ?? 0
+                    db,
+                    sql: Self.rawBytesSumSQL(
+                        column: "net_out", timeColumn: "timestamp",
+                        until: now.timeIntervalSince1970),
+                    arguments: [now.timeIntervalSince1970, rawSince.timeIntervalSince1970]) ?? 0
 
             if since < minuteWatermark {
                 let minuteSince = max(since, hourWatermark)
@@ -148,12 +154,29 @@ extension SampleStore {
                     since: minuteSince, until: minuteWatermark)
             }
             if since < hourWatermark {
+                // Hour buckets align to the hour grid; the window's left edge
+                // usually does not. Counting only buckets at or after `since`
+                // would drop the bucket the edge lands in, silently losing up
+                // to an hour of traffic (measured: a ~52-minute hole). Count
+                // from the edge bucket's grid start, then subtract the minute
+                // tier's portion of that bucket that precedes `since` — the
+                // minute tier retains it (7 days), so the subtraction range is
+                // never older than an hour and always present.
+                let edge = Date(
+                    timeIntervalSince1970: (since.timeIntervalSince1970 / 3600).rounded(.down)
+                        * 3600)
                 downloaded += try Self.bucketedBytesSum(
                     db, table: "system_hour", column: "net_in_sum",
-                    since: since, until: hourWatermark)
+                    since: edge, until: hourWatermark)
+                downloaded -= try Self.bucketedBytesSum(
+                    db, table: "system_minute", column: "net_in_sum",
+                    since: edge, until: since)
                 uploaded += try Self.bucketedBytesSum(
                     db, table: "system_hour", column: "net_out_sum",
-                    since: since, until: hourWatermark)
+                    since: edge, until: hourWatermark)
+                uploaded -= try Self.bucketedBytesSum(
+                    db, table: "system_minute", column: "net_out_sum",
+                    since: edge, until: since)
             }
             return NetworkHistoryTotals(
                 downloaded: UInt64(max(0, downloaded).rounded()),
@@ -182,12 +205,12 @@ extension SampleStore {
                             SELECT timestamp, net_in, net_out,
                                    COALESCE(
                                      LEAD(timestamp) OVER (ORDER BY timestamp),
-                                     timestamp + 1) - timestamp AS dt
+                                     ?) - timestamp AS dt
                             FROM system_samples
                             WHERE timestamp >= ?
                         )
                         GROUP BY b ORDER BY b
-                        """, arguments: [since])
+                        """, arguments: [now.timeIntervalSince1970, since])
                 return rows.map {
                     NetworkUsagePoint(
                         date: Date(timeIntervalSince1970: $0["b"] as Double),
@@ -227,7 +250,7 @@ extension SampleStore {
                                    COALESCE(
                                      LEAD(timestamp) OVER (
                                        PARTITION BY process_id ORDER BY timestamp),
-                                     timestamp + 1) - timestamp AS dt
+                                     ?) - timestamp AS dt
                             FROM process_samples
                             WHERE timestamp >= ?
                         ) s
@@ -235,7 +258,7 @@ extension SampleStore {
                         GROUP BY p.executable_path, p.bundle_id
                         HAVING din + dout > 0
                         ORDER BY din + dout DESC LIMIT \(limit)
-                        """, arguments: [since])
+                        """, arguments: [now.timeIntervalSince1970, since])
             case .minute, .hour:
                 let table = period.granularity == .minute ? "process_minute" : "process_hour"
                 rows = try Row.fetchAll(
@@ -287,14 +310,14 @@ extension SampleStore {
                                    COALESCE(
                                      LEAD(ps.timestamp) OVER (
                                        PARTITION BY ps.process_id ORDER BY ps.timestamp),
-                                     ps.timestamp + 1) - ps.timestamp AS dt
+                                     ?) - ps.timestamp AS dt
                             FROM process_samples ps
                             JOIN processes p ON p.id = ps.process_id
                             WHERE ps.timestamp >= ? AND \(Self.appFilter(
                                 executablePath: executablePath, bundleID: bundleID))
                         )
                         GROUP BY b ORDER BY b
-                        """, arguments: [since])
+                        """, arguments: [now.timeIntervalSince1970, since])
                 return rows.map {
                     NetworkUsagePoint(
                         date: Date(timeIntervalSince1970: $0["b"] as Double),
@@ -349,15 +372,20 @@ extension SampleStore {
     }
 
     /// Time-integrated bytes on the raw tier since `since`. A row's rate was in
-    /// effect until the next row (the same LEAD convention the raw consumer
-    /// queries use), so SUM(rate * dt) is the transferred amount.
-    private static func rawBytesSumSQL(column: String, timeColumn: String) -> String {
+    /// effect until the next row, or until `until` for the trailing row (the
+    /// query instant, so the still-active tail of traffic is not dropped), so
+    /// SUM(rate * dt) is the transferred amount.
+    private static func rawBytesSumSQL(
+        column: String, timeColumn: String, until: Double
+    )
+        -> String
+    {
         """
         SELECT SUM(\(column) * dt) FROM (
             SELECT \(column),
                    COALESCE(
-                     LEAD(timestamp) OVER (ORDER BY timestamp),
-                     timestamp + 1) - timestamp AS dt
+                                            LEAD(timestamp) OVER (ORDER BY timestamp),
+                     ?) - timestamp AS dt
             FROM system_samples
             WHERE \(timeColumn) >= ?
         )
