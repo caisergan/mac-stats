@@ -117,9 +117,16 @@ final class NetworkHistoryTests: XCTestCase {
                 system: systemTick(60),
                 processes: [processTick(60, pid: 1001, down: 1000)],
                 unreadableProcessCount: 0))
-        let now = anchor.addingTimeInterval(120)
-        try Retention.run(store.databasePool, now: now)
+        // A process with no network usage must not appear in the table at all:
+        // every process in the catalog would otherwise bury the real users.
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(60),
+                processes: [processTick(60, pid: 1002, down: 0)],
+                unreadableProcessCount: 0))
 
+        let now = anchor.addingTimeInterval(120)  // minute m0 and m1 are complete
+        try Retention.run(store.databasePool, now: now)
         let apps = try store.networkAppUsage(.oneDay, now: now)
         XCTAssertEqual(apps.count, 1, "two launches of one executable group into one row")
         XCTAssertEqual(apps[0].downloaded, 120_000, accuracy: 1)

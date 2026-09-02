@@ -246,11 +246,14 @@ struct NetworkHistoryPanel: View {
 
     private enum ChartSide { case download, upload }
 
+    /// Shares are fractions of the COMBINED transferred total, so a row's
+    /// download + upload shares sum to its overall share of traffic and the
+    /// sidebar's percentage never exceeds 100%.
     private func share(of app: NetworkAppUsage, side: ChartSide) -> Double {
-        let all = side == .download ? bundle.totals.downloaded : bundle.totals.uploaded
-        guard all > 0 else { return 0 }
+        let combined = bundle.totals.downloaded + bundle.totals.uploaded
+        guard combined > 0 else { return 0 }
         let bytes = side == .download ? app.downloaded : app.uploaded
-        return min(1, Double(bytes) / Double(all))
+        return Double(bytes) / Double(combined)
     }
 
     private func toggleExpand(_ app: NetworkAppUsage) {
@@ -327,9 +330,9 @@ struct NetworkHistoryPanel: View {
     }
 
     private func remainderShare(_ side: ChartSide, _ topTotal: UInt64) -> Double {
-        let all = side == .download ? bundle.totals.downloaded : bundle.totals.uploaded
-        guard all > 0 else { return 0 }
-        return min(1, Double(remainder(side, topTotal)) / Double(all))
+        let combined = bundle.totals.downloaded + bundle.totals.uploaded
+        guard combined > 0 else { return 0 }
+        return Double(remainder(side, topTotal)) / Double(combined)
     }
 
     // MARK: - Connections

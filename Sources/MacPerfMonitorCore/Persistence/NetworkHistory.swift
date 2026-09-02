@@ -219,7 +219,7 @@ extension SampleStore {
                 rows = try Row.fetchAll(
                     db,
                     sql: """
-                        SELECT p.executable_path, p.bundle_id, p.name,
+                        SELECT p.executable_path, p.bundle_id, MAX(p.name) AS name,
                                CAST(SUM(net_in * dt) AS INTEGER) AS din,
                                CAST(SUM(net_out * dt) AS INTEGER) AS dout
                         FROM (
@@ -232,7 +232,8 @@ extension SampleStore {
                             WHERE timestamp >= ?
                         ) s
                         JOIN processes p ON p.id = s.process_id
-                        GROUP BY s.process_id
+                        GROUP BY p.executable_path, p.bundle_id
+                        HAVING din + dout > 0
                         ORDER BY din + dout DESC LIMIT \(limit)
                         """, arguments: [since])
             case .minute, .hour:
@@ -248,6 +249,7 @@ extension SampleStore {
                         JOIN processes p ON p.id = s.process_id
                         WHERE s.bucket >= ?
                         GROUP BY p.executable_path, p.bundle_id
+                        HAVING din + dout > 0
                         ORDER BY din + dout DESC LIMIT \(limit)
                         """, arguments: [since])
             }
