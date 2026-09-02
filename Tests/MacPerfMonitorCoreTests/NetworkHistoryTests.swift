@@ -146,8 +146,64 @@ final class NetworkHistoryTests: XCTestCase {
         XCTAssertEqual(totals.downloaded, UInt64(0))
         XCTAssertEqual(totals.uploaded, UInt64(0))
 
-        // Other metrics survive the clear untouched.
         let points = try store.systemHistory(.oneDay, now: now)
         XCTAssertEqual(points.first?.networkInBytesPerSec ?? -1, 1_000_000, accuracy: 0.001)
+    }
+
+    func testInterfaceUsageAccruesAndRollsUp() throws {
+        try store.insert(systemSample: systemTick(0))
+        // Two 30 s intervals of the same rates land in one minute bucket.
+        try store.recordInterfaceUsage(["en0": (10, 5)], dt: 30, at: anchor)
+        try store.recordInterfaceUsage(["en0": (10, 5)], dt: 30, at: anchor.addingTimeInterval(30))
+
+        let minuteTotals = try store.interfaceUsage(.lastHour, now: anchor.addingTimeInterval(60))
+        XCTAssertEqual(minuteTotals.count, 1)
+        XCTAssertEqual(minuteTotals[0].name, "en0")
+        XCTAssertEqual(minuteTotals[0].downloaded, UInt64(600))
+        XCTAssertEqual(minuteTotals[0].uploaded, UInt64(300))
+
+        let hourDone = anchor.addingTimeInterval(7200)
+        try Retention.run(store.databasePool, now: hourDone)
+        let hourTotals = try store.interfaceUsage(.all, now: hourDone)
+        XCTAssertEqual(hourTotals.count, 1)
+        XCTAssertEqual(hourTotals[0].downloaded, UInt64(600))
+
+        let series = try store.interfaceUsageSeries("en0", .all, now: hourDone)
+        XCTAssertEqual(series.count, 1)
+        XCTAssertEqual(series[0].downloaded, 600, accuracy: 0.001)
+    }
+
+    func testConnectionDeltasRoundTripAndGroupByRemoteAndApp() throws {
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(0),
+                processes: [processTick(0, pid: 1000, down: 0)],
+                unreadableProcessCount: 0))
+        let first = anchor.addingTimeInterval(30)
+        try store.recordConnectionDeltas([
+            ConnectionHistoryReader.Delta(
+                pid: 1000, remoteIP: "17.57.146.57", remotePort: 443,
+                inBytes: 1_000, outBytes: 200, timestamp: first)
+        ])
+        // A second cycle later the same day adds up.
+        try store.recordConnectionDeltas([
+            ConnectionHistoryReader.Delta(
+                pid: 1000, remoteIP: "17.57.146.57", remotePort: 443,
+                inBytes: 500, outBytes: 100, timestamp: first.addingTimeInterval(30))
+        ])
+        // An unknown pid (process not in the catalog) is dropped, not crashed on.
+        try store.recordConnectionDeltas([
+            ConnectionHistoryReader.Delta(
+                pid: 99_999, remoteIP: "1.2.3.4", remotePort: 80,
+                inBytes: 1, outBytes: 1, timestamp: first)
+        ])
+
+        let rows = try store.connectionUsage(.all, now: anchor.addingTimeInterval(60))
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].remoteIP, "17.57.146.57")
+        XCTAssertEqual(rows[0].downloaded, 1_500)
+        XCTAssertEqual(rows[0].uploaded, 300)
+        XCTAssertEqual(rows[0].firstTransfer, first)
+        XCTAssertEqual(rows[0].lastTransfer, first.addingTimeInterval(30))
     }
 }

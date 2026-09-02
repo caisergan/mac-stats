@@ -559,6 +559,22 @@ public enum Retention {
                   net_out_sum = excluded.net_out_sum
                 """, arguments: [watermark, completeUpTo])
 
+        // Interface tiers ride the same watermark: minute buckets sum into
+        // hour buckets exactly like the system tier.
+        try db.execute(
+            sql: """
+                INSERT INTO interface_hour (interface, bucket, net_in_sum, net_out_sum)
+                SELECT interface,
+                       CAST(bucket / 3600 AS INTEGER) * 3600 AS b,
+                       SUM(net_in_sum),
+                       SUM(net_out_sum)
+                FROM interface_minute
+                WHERE bucket >= ? AND bucket < ?
+                GROUP BY interface, b
+                ON CONFLICT(interface, bucket) DO UPDATE SET
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
+                """, arguments: [watermark, completeUpTo])
         try setMeta(db, "hour_watermark", completeUpTo)
     }
 
@@ -579,6 +595,8 @@ public enum Retention {
             ("system_minute", "bucket", nowTS - policy.minuteWindow),
             ("process_hour", "bucket", nowTS - policy.hourWindow),
             ("system_hour", "bucket", nowTS - policy.hourWindow),
+            ("interface_minute", "bucket", nowTS - policy.minuteWindow),
+            ("interface_hour", "bucket", nowTS - policy.hourWindow),
         ]
         let batchSize = 10_000
         let maximumDeletesPerPass = 500_000
@@ -611,6 +629,12 @@ public enum Retention {
         try pool.write { db in
             try pruneDimensionsIfDue(db, nowTS: nowTS, hourCutoff: nowTS - policy.hourWindow)
         }
+
+        try pool.write { db in
+            try db.execute(
+                sql: "DELETE FROM connection_stats WHERE day < ?",
+                arguments: [floor((nowTS - policy.hourWindow) / 86_400)])
+        }
     }
 
     static func trim(_ db: Database, nowTS: Double, policy: RetentionPolicy) throws {
@@ -627,7 +651,13 @@ public enum Retention {
         try db.execute(sql: "DELETE FROM system_minute WHERE bucket < ?", arguments: [minuteCutoff])
         try db.execute(sql: "DELETE FROM process_hour WHERE bucket < ?", arguments: [hourCutoff])
         try db.execute(sql: "DELETE FROM system_hour WHERE bucket < ?", arguments: [hourCutoff])
-
+        try db.execute(
+            sql: "DELETE FROM interface_minute WHERE bucket < ?", arguments: [minuteCutoff])
+        try db.execute(
+            sql: "DELETE FROM interface_hour WHERE bucket < ?", arguments: [hourCutoff])
+        try db.execute(
+            sql: "DELETE FROM connection_stats WHERE day < ?",
+            arguments: [floor((nowTS - policy.hourWindow) / 86_400)])
         try pruneDimensionsIfDue(db, nowTS: nowTS, hourCutoff: hourCutoff)
     }
 

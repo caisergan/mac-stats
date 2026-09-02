@@ -202,11 +202,22 @@ public enum MacPerfMonitorDatabase {
         // net_in_sum/net_out_sum (SUM(rate * dt) over the bucket, computed with
         // the same time weights as the existing averages). The process raw tier
         // additionally gains the download/upload split the nettop reader already
-        // parses but previously combined into net_total; net_total stays so the
+        // parsed but previously combined into net_total; net_total stays so the
         // existing leaderboard columns are untouched. All defaulted to zero,
         // which reads as "no traffic recorded" for pre-upgrade rows.
         migrator.registerMigration("v16-network-byte-totals") { db in
             try db.execute(sql: Schema.v16)
+        }
+        // Per-interface usage and per-connection history. The interface tiers
+        // mirror the system tiers (minute buckets rolled up to hour by
+        // summation) but keyed by BSD name, which is a small closed set, so no
+        // dimension table. connection_stats accumulates daily per
+        // (process, remote endpoint): the byte deltas the connection reader
+        // differences off nettop's cumulative per-flow counters, plus the
+        // first/last transfer instants the Connection History table shows.
+        // Deltas accrue only while the opt-in connection tracking is on.
+        migrator.registerMigration("v17-interfaces-and-connections") { db in
+            try db.execute(sql: Schema.v17)
         }
         return migrator
     }
@@ -644,6 +655,39 @@ enum Schema {
         ALTER TABLE process_minute ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
         ALTER TABLE process_hour ADD COLUMN net_in_sum REAL NOT NULL DEFAULT 0;
         ALTER TABLE process_hour ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
+        """
+
+    static let v17 = """
+        CREATE TABLE interface_minute (
+            interface TEXT NOT NULL,
+            bucket REAL NOT NULL,
+            net_in_sum REAL NOT NULL DEFAULT 0,
+            net_out_sum REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (interface, bucket)
+        );
+        CREATE INDEX idx_interface_minute_bucket ON interface_minute(bucket);
+
+        CREATE TABLE interface_hour (
+            interface TEXT NOT NULL,
+            bucket REAL NOT NULL,
+            net_in_sum REAL NOT NULL DEFAULT 0,
+            net_out_sum REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (interface, bucket)
+        );
+        CREATE INDEX idx_interface_hour_bucket ON interface_hour(bucket);
+
+        CREATE TABLE connection_stats (
+            process_id INTEGER NOT NULL REFERENCES processes(id) ON DELETE CASCADE,
+            remote_ip TEXT NOT NULL,
+            remote_port INTEGER NOT NULL,
+            day INTEGER NOT NULL,
+            net_in_sum REAL NOT NULL DEFAULT 0,
+            net_out_sum REAL NOT NULL DEFAULT 0,
+            first_transfer REAL NOT NULL,
+            last_transfer REAL NOT NULL,
+            PRIMARY KEY (process_id, remote_ip, remote_port, day)
+        );
+        CREATE INDEX idx_connection_stats_day ON connection_stats(day);
         """
 }
 

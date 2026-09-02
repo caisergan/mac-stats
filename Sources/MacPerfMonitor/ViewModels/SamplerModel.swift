@@ -665,6 +665,43 @@ final class SamplerModel: ObservableObject {
         }
     }
 
+    /// UserDefaults key for recording connection history (remote hosts per
+    /// app). Off by default: it is one more `nettop` run per cycle, and the
+    /// per-app totals work without it.
+    static let connectionHistoryDefaultsKey = "recordConnectionHistory"
+
+    /// The opt-in per-connection reader. Installed on `queue` so toggling is
+    /// idempotent; its deltas hop back through `queue` to reach `store`.
+    private var connectionHistoryReader: ConnectionHistoryReader?
+
+    /// Turn connection-history recording on or off. The reader runs its own
+    /// slow nettop cadence, off every sampling path.
+    func setConnectionHistory(_ enabled: Bool) {
+        queue.async { [weak self] in
+            guard let self, enabled != (self.connectionHistoryReader != nil) else { return }
+            if enabled {
+                let reader = ConnectionHistoryReader { [weak self] deltas in
+                    guard let self else { return }
+                    self.queue.async {
+                        guard let store = self.store else { return }
+                        do {
+                            try store.recordConnectionDeltas(deltas)
+                        } catch {
+                            AppLog.sampler.error(
+                                "connection delta insert failed: \(String(describing: error), privacy: .public)"
+                            )
+                        }
+                    }
+                }
+                self.connectionHistoryReader = reader
+                reader.start()
+            } else {
+                self.connectionHistoryReader?.stop()
+                self.connectionHistoryReader = nil
+            }
+        }
+    }
+
     // MARK: - Table / sampling interval
 
     /// UserDefaults key for the global refresh interval in seconds, shared by the
@@ -1150,9 +1187,29 @@ final class SamplerModel: ObservableObject {
         var persistStore: SampleStore?
         if scanDue, persistenceEnabled, let store {
             let now = Date()
+            let persistDt = lastPersistAt.map { now.timeIntervalSince($0) }
             if lastPersistAt.map({ now.timeIntervalSince($0) >= persistMinInterval }) ?? true {
                 lastPersistAt = now
                 persistStore = store
+            }
+            if persistStore != nil {
+                let at = now
+                scanQueue.async { [weak self] in
+                    guard let self else { return }
+                    guard let persistStore = self.store else { return }
+                    do {
+                        // A stale dt (sleep, long pause) would multiply stale
+                        // rates into a phantom dump, so bound it.
+                        if let dt = persistDt, dt > 0, dt < 300 {
+                            try persistStore.recordInterfaceUsage(
+                                self.sampler.perInterfaceRates(), dt: dt, at: at)
+                        }
+                    } catch {
+                        AppLog.sampler.error(
+                            "interface usage insert failed: \(String(describing: error), privacy: .public)"
+                        )
+                    }
+                }
             }
         }
         let persistBucket = persistStore == nil ? 0 : Self.configuredStandardResInterval()

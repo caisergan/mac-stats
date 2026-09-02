@@ -405,3 +405,186 @@ extension SampleStore {
         return "p.executable_path IS NULL AND p.bundle_id IS NULL"
     }
 }
+
+// MARK: - Interfaces and connections (v17)
+
+/// One interface's transferred amounts over a period.
+public struct InterfaceUsage: Sendable, Identifiable, Equatable {
+    public var name: String
+    public var downloaded: UInt64
+    public var uploaded: UInt64
+
+    public var id: String { name }
+}
+
+/// One remote endpoint's transferred amounts over a period, attributed to the
+/// app that opened the connection. Grouped the way the Connection History
+/// table shows rows: remote IP plus app, with the transfer instants.
+public struct ConnectionUsage: Sendable, Identifiable, Equatable {
+    public var remoteIP: String
+    public var appName: String
+    public var executablePath: String?
+    public var downloaded: UInt64
+    public var uploaded: UInt64
+    public var firstTransfer: Date
+    public var lastTransfer: Date
+
+    public var id: String { "\(remoteIP)/\(executablePath ?? appName)" }
+}
+
+extension SampleStore {
+    /// Accrue one interval of per-interface rates into the current minute
+    /// bucket. Called on the persist cadence; the deltas add up, so a bucket
+    /// holds the interface's transferred bytes regardless of cadence.
+    public func recordInterfaceUsage(
+        _ rates: [String: (inBytesPerSec: Double, outBytesPerSec: Double)],
+        dt: TimeInterval, at now: Date = Date()
+    ) throws {
+        guard dt > 0, !rates.isEmpty else { return }
+        let bucket = (now.timeIntervalSince1970 / 60).rounded(.down) * 60
+        try databasePool.write { db in
+            for (name, rate) in rates {
+                try db.execute(
+                    sql: """
+                        INSERT INTO interface_minute (interface, bucket, net_in_sum, net_out_sum)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(interface, bucket) DO UPDATE SET
+                            net_in_sum = net_in_sum + excluded.net_in_sum,
+                            net_out_sum = net_out_sum + excluded.net_out_sum
+                        """,
+                    arguments: [
+                        name, bucket, rate.inBytesPerSec * dt, rate.outBytesPerSec * dt,
+                    ])
+            }
+        }
+    }
+
+    /// Persist one cycle's per-connection byte deltas, resolving each pid to
+    /// the newest matching `processes` row (the pid cache lives for one call:
+    /// a cycle's deltas are a few dozen, and resolution is one indexed probe).
+    public func recordConnectionDeltas(
+        _ deltas: [ConnectionHistoryReader.Delta]
+    ) throws {
+        guard !deltas.isEmpty else { return }
+        try databasePool.write { db in
+            var processIDs: [Int32: Int64?] = [:]
+            for delta in deltas {
+                if processIDs[delta.pid] == nil {
+                    processIDs[delta.pid] = try Int64.fetchOne(
+                        db,
+                        sql: """
+                            SELECT id FROM processes WHERE pid = ?
+                            ORDER BY last_seen DESC LIMIT 1
+                            """, arguments: [delta.pid])
+                }
+                guard let processID = processIDs[delta.pid] ?? nil else { continue }
+                let timestamp = delta.timestamp.timeIntervalSince1970
+                let day = (timestamp / 86_400).rounded(.down)
+                try db.execute(
+                    sql: """
+                        INSERT INTO connection_stats
+                            (process_id, remote_ip, remote_port, day, net_in_sum,
+                             net_out_sum, first_transfer, last_transfer)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(process_id, remote_ip, remote_port, day) DO UPDATE SET
+                            net_in_sum = net_in_sum + excluded.net_in_sum,
+                            net_out_sum = net_out_sum + excluded.net_out_sum,
+                            last_transfer = excluded.last_transfer
+                        """,
+                    arguments: [
+                        processID, delta.remoteIP, delta.remotePort, day,
+                        Double(delta.inBytes), Double(delta.outBytes), timestamp, timestamp,
+                    ])
+            }
+        }
+    }
+
+    /// Per-interface transferred amounts over the period, heaviest first.
+    public func interfaceUsage(
+        _ period: NetworkHistoryPeriod, now: Date = Date()
+    ) throws -> [InterfaceUsage] {
+        let since = (period.seconds.map { now.addingTimeInterval(-$0) } ?? .distantPast)
+            .timeIntervalSince1970
+        let table = period.granularity == .hour ? "interface_hour" : "interface_minute"
+        return try databasePool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT interface, SUM(net_in_sum) AS din, SUM(net_out_sum) AS dout
+                    FROM \(table) WHERE bucket >= ?
+                    GROUP BY interface ORDER BY din + dout DESC
+                    """, arguments: [since]
+            )
+            .map {
+                InterfaceUsage(
+                    name: $0["interface"],
+                    downloaded: UInt64(max(0, ($0["din"] as Double?) ?? 0).rounded()),
+                    uploaded: UInt64(max(0, ($0["dout"] as Double?) ?? 0).rounded()))
+            }
+        }
+    }
+
+    /// One interface's transferred-amount series, for the interface picker's chart.
+    public func interfaceUsageSeries(
+        _ name: String, _ period: NetworkHistoryPeriod, now: Date = Date()
+    ) throws -> [NetworkUsagePoint] {
+        let since = (period.seconds.map { now.addingTimeInterval(-$0) } ?? .distantPast)
+            .timeIntervalSince1970
+        let width = period.seriesBucketWidth
+        let table = period.granularity == .hour ? "interface_hour" : "interface_minute"
+        return try databasePool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT CAST(bucket / \(width) AS INTEGER) * \(width) AS b,
+                           SUM(net_in_sum) AS din, SUM(net_out_sum) AS dout
+                    FROM \(table) WHERE interface = ? AND bucket >= ?
+                    GROUP BY b ORDER BY b
+                    """, arguments: [name, since]
+            )
+            .map {
+                NetworkUsagePoint(
+                    date: Date(timeIntervalSince1970: $0["b"] as Double),
+                    downloaded: ($0["din"] as Double?) ?? 0,
+                    uploaded: ($0["dout"] as Double?) ?? 0)
+            }
+        }
+    }
+
+    /// Connection-history rows over the period, heaviest total first, grouped
+    /// by remote IP and app the way the Connection History table shows them.
+    public func connectionUsage(
+        _ period: NetworkHistoryPeriod, now: Date = Date(), limit: Int = 200
+    ) throws -> [ConnectionUsage] {
+        let since = (period.seconds.map { now.addingTimeInterval(-$0) } ?? .distantPast)
+            .timeIntervalSince1970
+        let sinceDay = (since / 86_400).rounded(.down)
+        return try databasePool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT c.remote_ip,
+                           MAX(p.name) AS name, MAX(p.executable_path) AS path,
+                           CAST(SUM(c.net_in_sum) AS INTEGER) AS din,
+                           CAST(SUM(c.net_out_sum) AS INTEGER) AS dout,
+                           MIN(c.first_transfer) AS first, MAX(c.last_transfer) AS last
+                    FROM connection_stats c
+                    JOIN processes p ON p.id = c.process_id
+                    WHERE c.day >= ?
+                    GROUP BY c.remote_ip, p.executable_path
+                    ORDER BY din + dout DESC LIMIT \(limit)
+                    """, arguments: [sinceDay]
+            )
+            .map {
+                ConnectionUsage(
+                    remoteIP: $0["remote_ip"],
+                    appName: $0["name"] as String? ?? "",
+                    executablePath: $0["path"] as String?,
+                    downloaded: SQLInt.read($0["din"] as Int64? ?? 0),
+                    uploaded: SQLInt.read($0["dout"] as Int64? ?? 0),
+                    firstTransfer: Date(timeIntervalSince1970: $0["first"] as Double ?? 0),
+                    lastTransfer: Date(timeIntervalSince1970: $0["last"] as Double ?? 0))
+            }
+        }
+    }
+}

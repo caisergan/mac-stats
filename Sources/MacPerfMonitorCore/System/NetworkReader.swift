@@ -41,6 +41,7 @@ public final class NetworkReader {
         var deltaIn: UInt64 = 0
         var deltaOut: UInt64 = 0
         var busiest: (name: String, bytes: UInt64)?
+        var perInterface: [String: (inBytesPerSec: Double, outBytesPerSec: Double)] = [:]
 
         for (name, current) in counters {
             guard let previous = lastCounters[name] else { continue }
@@ -53,13 +54,16 @@ public final class NetworkReader {
             deltaOut &+= outD
             let total = inD &+ outD
             if total > (busiest?.bytes ?? 0) { busiest = (name, total) }
+            if dt > 0 {
+                perInterface[name] = (Double(inD) / dt, Double(outD) / dt)
+            }
         }
 
         lastCounters = counters
         lastTime = now
         sessionIn &+= deltaIn
         sessionOut &+= deltaOut
-
+        perInterfaceRates = perInterface
         let inRate = dt > 0 ? Double(deltaIn) / dt : 0
         let outRate = dt > 0 ? Double(deltaOut) / dt : 0
 
@@ -84,8 +88,14 @@ public final class NetworkReader {
     public func reset() {
         lastCounters.removeAll()
         lastTime = nil
+        perInterfaceRates = [:]
     }
 
+    /// The previous read's per-interface rates (bytes/sec, physical `en*`
+    /// interfaces only), for the per-interface usage history. Empty on the
+    /// first read and after `reset()`.
+    public private(set) var perInterfaceRates:
+        [String: (inBytesPerSec: Double, outBytesPerSec: Double)] = [:]
     private struct InterfaceSnapshot {
         var counters: [String: (inBytes: UInt32, outBytes: UInt32)]
         var ipv4: [String: String]

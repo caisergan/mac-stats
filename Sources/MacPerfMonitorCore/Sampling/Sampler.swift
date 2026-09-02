@@ -246,6 +246,13 @@ public final class Sampler {
         reader?.start()
     }
 
+    /// The network reader's latest per-interface rates (bytes/sec), for the
+    /// per-interface usage history. Empty until the second read. Confined to
+    /// the sampler's serial queue like everything else here.
+    public func perInterfaceRates() -> [String: (inBytesPerSec: Double, outBytesPerSec: Double)] {
+        networkReader.perInterfaceRates
+    }
+
     /// Capture one full tick: the cheap system/CPU sample plus the heavy
     /// per-process scan. Used by the CLI and tests; the live app calls
     /// `tickSystem` and `tickProcesses` separately on different cadences.
