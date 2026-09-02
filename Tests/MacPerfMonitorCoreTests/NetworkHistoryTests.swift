@@ -181,9 +181,10 @@ final class NetworkHistoryTests: XCTestCase {
     func testDeadProcessUsageDoesNotGrowWithTime() throws {
         // A process that stopped transferring (its last raw row carries its
         // final rate) must not accrue phantom bytes as the query instant moves
-        // on: the trailing row's dt is bounded by the process's last sighting,
-        // not by `now`. The original code extrapolated the last rate to now and
-        // the per-app figure climbed ~rate x elapsed forever.
+        // on: the trailing row's dt stops at its minute bucket's end, exactly
+        // like the minute rollup counts it. The original code extrapolated the
+        // last rate to now and the per-app figure climbed ~rate x elapsed
+        // forever.
         try store.insert(
             Sampler.Snapshot(
                 system: systemTick(0),
@@ -195,9 +196,9 @@ final class NetworkHistoryTests: XCTestCase {
         XCTAssertEqual(early.count, 1)
         XCTAssertEqual(later.count, 1)
         XCTAssertEqual(early[0].downloaded, later[0].downloaded)
-        // Bounded: one row at 1000 B/s, dt capped by last_seen + 15 s.
-        XCTAssertLessThanOrEqual(later[0].downloaded, 15_000)
-        XCTAssertGreaterThan(later[0].downloaded, 0)
+        // Bounded: one row at 1000 B/s, the anchor is minute-aligned, so the
+        // row's bucket ends 60 s after it: 60,000 bytes, never more.
+        XCTAssertEqual(later[0].downloaded, 60_000)
     }
 
     func testTotalsCountTheHourBucketTheWindowEdgeLandsIn() throws {

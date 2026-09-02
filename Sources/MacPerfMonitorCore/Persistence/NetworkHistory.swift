@@ -250,9 +250,9 @@ extension SampleStore {
                                    COALESCE(
                                      LEAD(ps.timestamp) OVER (
                                        PARTITION BY ps.process_id ORDER BY ps.timestamp),
-                                     MIN(?, p.last_seen + 15)) - ps.timestamp AS dt
+                                     MIN(?, (CAST(ps.timestamp / 60 AS INTEGER) + 1) * 60.0))
+                                     - ps.timestamp AS dt
                             FROM process_samples ps
-                            JOIN processes p ON p.id = ps.process_id
                             WHERE ps.timestamp >= ?
                         ) s
                         JOIN processes p ON p.id = s.process_id
@@ -311,7 +311,8 @@ extension SampleStore {
                                    COALESCE(
                                      LEAD(ps.timestamp) OVER (
                                        PARTITION BY ps.process_id ORDER BY ps.timestamp),
-                                     MIN(?, p.last_seen + 15)) - ps.timestamp AS dt
+                                     MIN(?, (CAST(ps.timestamp / 60 AS INTEGER) + 1) * 60.0))
+                                     - ps.timestamp AS dt
                             FROM process_samples ps
                             JOIN processes p ON p.id = ps.process_id
                             WHERE ps.timestamp >= ? AND \(Self.appFilter(
