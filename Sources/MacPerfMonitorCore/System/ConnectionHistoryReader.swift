@@ -177,8 +177,9 @@ public final class ConnectionHistoryReader {
     // MARK: - Subprocess
 
     /// One `nettop -m tcp -L 1` to a pipe with a hard timeout, mirroring
-    /// `NetworkProcessReader.runOneShot`.
-    private static func runOneShot(timeout: TimeInterval = 15) -> String? {
+    /// `NetworkProcessReader.runOneShot`. The 90 s ceiling clears nettop's
+    /// measured ~30 s worst-case run on slow machines (see there).
+    private static func runOneShot(timeout: TimeInterval = 90) -> String? {
         guard FileManager.default.isExecutableFile(atPath: toolPath) else {
             log.error("nettop not found at \(toolPath, privacy: .public)")
             return nil
@@ -188,8 +189,10 @@ public final class ConnectionHistoryReader {
             task.executableURL = URL(fileURLWithPath: toolPath)
             // -m tcp per-connection rows · -x raw bytes · -J only the byte
             // columns (which also drops the interface/state columns, keeping
-            // every row to time,label,in,out) · -L 1 one sample then exit.
-            task.arguments = ["-m", "tcp", "-x", "-J", "bytes_in,bytes_out", "-L", "1"]
+            // every row to time,label,in,out) · -s 1 the sampling delay, which
+            // cuts a one-shot run from nettop's ~30 s default to ~5 s · -L 1 one
+            // sample then exit.
+            task.arguments = ["-m", "tcp", "-x", "-J", "bytes_in,bytes_out", "-s", "1", "-L", "1"]
             let outPipe = Pipe()
             task.standardOutput = outPipe
             task.standardError = FileHandle.nullDevice

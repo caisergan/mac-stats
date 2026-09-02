@@ -15,12 +15,12 @@ import os.log
 /// `latestRates()`, so a slow nettop only makes the per-app network figures
 /// refresh less often — it no longer throttles sampling.
 ///
-/// `start()` launches the loop; `stop()` halts it. A hard timeout guards against a
-/// wedged nettop, and adaptive pacing (`paceSleep`) keeps it from spinning on fast
-/// machines *and* from respawning back-to-back on machines where one run takes
-/// longer than the fixed floor.
-/// `CPUMath.delta` clamps the occasional counter decrease (a flow closing, or a
-/// counter reset) to zero.
+/// `start()` launches the loop; `stop()` halts it. A hard timeout guards against
+/// a wedged nettop. Pacing (`paceSleep`) targets one nettop run every
+/// `minRefreshInterval`: on machines where a run takes longer than the floor it
+/// respawns back-to-back, so the per-app figures stay as fresh as the platform
+/// allows. `CPUMath.delta` clamps the occasional counter decrease (a flow
+/// closing, or a counter reset) to zero.
 public final class NetworkProcessReader {
     /// One process's cumulative byte counts (kernel counters, persistent).
     public struct Counters: Sendable, Equatable {
@@ -34,23 +34,22 @@ public final class NetworkProcessReader {
 
     private static let log = Logger(subsystem: "uk.co.bzwrd.macperfmonitor", category: "nettop")
     private static let toolPath = "/usr/bin/nettop"
-    /// Don't run nettop more often than this even on a machine where it's fast,
-    /// so we don't spin spawning it. On slow machines `paceSleep` stretches the
-    /// interval further, keyed to the measured run duration.
-    static let minRefreshInterval: TimeInterval = 2
+    /// Target cadence for one nettop run: a run starts every `minRefreshInterval`
+    /// seconds at most. On this class of machine a single run takes a measured
+    /// ~5 s wall (nettop's first sample waits its sampling interval), so the
+    /// floor and the run duration coincide and the loop runs nettop
+    /// continuously. A faster machine simply idles the remainder of the floor,
+    /// which also bounds respawns to at most 720/hour.
+    static let minRefreshInterval: TimeInterval = 5
 
-    /// How long to pause after a run that took `elapsed` seconds: enough that the
-    /// full cycle is at least `minRefreshInterval`, and at least twice the run
-    /// duration, so nettop occupies at most ~1/3 of wall time however slow it is.
-    /// A fixed floor alone degenerates on slow machines — a single run takes ~5 s
-    /// idle (~17 s under load) on some Macs, so the old `floor - elapsed` sleep
-    /// was never taken and the loop respawned nettop back-to-back, hundreds of
-    /// times an hour, exactly when the machine was already struggling
-    /// (docs/fd-count-1620-diagnosis.md). The cost is only staler per-app rates
-    /// on those machines; `refreshLoop` differences over actual elapsed time, so
-    /// the rates stay correct.
+    /// Pause so the full cycle is at least `minRefreshInterval`: the floor minus
+    /// the run when the run is shorter, nothing when the run already exceeds it.
+    /// Runs that stretch (a slow machine under load) therefore degrade the
+    /// cadence rather than stacking concurrent nettop processes, and
+    /// `refreshLoop` differences over actual elapsed time, so the rates stay
+    /// correct at any cadence.
     static func paceSleep(afterRunTaking elapsed: TimeInterval) -> TimeInterval {
-        max(minRefreshInterval - elapsed, 2 * elapsed)
+        max(0, minRefreshInterval - elapsed)
     }
 
     private let lock = NSLock()
@@ -169,8 +168,11 @@ public final class NetworkProcessReader {
     /// Run one `nettop -L 1` to a pipe and return its full output, or nil on
     /// failure / timeout. Logging mode (not the interactive curses UI). Reads on a
     /// background thread with a hard timeout so a wedged nettop can't stall the
-    /// refresh loop.
-    private static func runOneShot(timeout: TimeInterval = 15) -> String? {
+    /// refresh loop. The timeout must clear nettop's worst REAL run, not just a
+    /// wedged one: on some machines (measured, macOS 26) a single `-L 1` run
+    /// takes a deterministic ~30 s of wall time, so anything near the old 15 s
+    /// floor killed every cycle and the reader silently produced no rates.
+    private static func runOneShot(timeout: TimeInterval = 90) -> String? {
         guard FileManager.default.isExecutableFile(atPath: toolPath) else {
             log.error("nettop not found at \(toolPath, privacy: .public)")
             return nil
@@ -179,8 +181,12 @@ public final class NetworkProcessReader {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: toolPath)
             // -P per process · -x raw bytes (no unit scaling) · -J only the byte
-            // columns · -L 1 one logging sample then exit.
-            task.arguments = ["-P", "-x", "-J", "bytes_in,bytes_out", "-L", "1"]
+            // columns · -s 1 the sampling delay. The delay matters: without it
+            // nettop waits its (measured ~30 s on this class of machine) default
+            // interval before producing its first sample; -s 1 brings a one-shot
+            // run down to ~5 s, which is what paces the refresh below. · -L 1 one
+            // logging sample then exit.
+            task.arguments = ["-P", "-x", "-J", "bytes_in,bytes_out", "-s", "1", "-L", "1"]
             let outPipe = Pipe()
             task.standardOutput = outPipe
             task.standardError = FileHandle.nullDevice
