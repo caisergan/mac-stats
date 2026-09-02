@@ -73,6 +73,13 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
     /// inter-tick and the UI ranks by it directly.
     public var networkBytesPerSec: Double
 
+    /// The download/upload split of `networkBytesPerSec`, from the same nettop
+    /// counters. Defaulted to zero so call sites that predate the split (and
+    /// rows recorded before v16) still build; the history queries sum these
+    /// into per-app transferred amounts.
+    public var networkInBytesPerSec: Double
+    public var networkOutBytesPerSec: Double
+
     public var isTranslated: Bool
     public var architecture: Architecture
 
@@ -159,6 +166,8 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
         energyNanojoules: UInt64 = 0,
         energyImpact: Double = 0,
         networkBytesPerSec: Double = 0,
+        networkInBytesPerSec: Double = 0,
+        networkOutBytesPerSec: Double = 0,
         isTranslated: Bool,
         architecture: Architecture,
         startTime: Date,
@@ -196,6 +205,8 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
         self.energyNanojoules = energyNanojoules
         self.energyImpact = energyImpact
         self.networkBytesPerSec = networkBytesPerSec
+        self.networkInBytesPerSec = networkInBytesPerSec
+        self.networkOutBytesPerSec = networkOutBytesPerSec
         self.isTranslated = isTranslated
         self.architecture = architecture
         self.startTime = startTime

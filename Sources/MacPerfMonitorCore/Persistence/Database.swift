@@ -196,6 +196,18 @@ public enum MacPerfMonitorDatabase {
         migrator.registerMigration("v15-sensor-domains") { db in
             try db.execute(sql: Schema.v15)
         }
+        // Network history byte totals. Rates alone cannot answer "how much did
+        // this app transfer this week": the amount is the time integral of the
+        // rate, so the rollups carry each bucket's transferred bytes as
+        // net_in_sum/net_out_sum (SUM(rate * dt) over the bucket, computed with
+        // the same time weights as the existing averages). The process raw tier
+        // additionally gains the download/upload split the nettop reader already
+        // parses but previously combined into net_total; net_total stays so the
+        // existing leaderboard columns are untouched. All defaulted to zero,
+        // which reads as "no traffic recorded" for pre-upgrade rows.
+        migrator.registerMigration("v16-network-byte-totals") { db in
+            try db.execute(sql: Schema.v16)
+        }
         return migrator
     }
 }
@@ -617,6 +629,21 @@ enum Schema {
         ALTER TABLE system_hour ADD COLUMN wireless_temp_max REAL;
         ALTER TABLE system_hour ADD COLUMN vrail_temp_max REAL;
         ALTER TABLE system_hour ADD COLUMN other_temp_max REAL;
+        """
+
+    static let v16 = """
+        ALTER TABLE process_samples ADD COLUMN net_in REAL NOT NULL DEFAULT 0;
+        ALTER TABLE process_samples ADD COLUMN net_out REAL NOT NULL DEFAULT 0;
+
+        ALTER TABLE system_minute ADD COLUMN net_in_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE system_minute ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE system_hour ADD COLUMN net_in_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE system_hour ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
+
+        ALTER TABLE process_minute ADD COLUMN net_in_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE process_minute ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE process_hour ADD COLUMN net_in_sum REAL NOT NULL DEFAULT 0;
+        ALTER TABLE process_hour ADD COLUMN net_out_sum REAL NOT NULL DEFAULT 0;
         """
 }
 

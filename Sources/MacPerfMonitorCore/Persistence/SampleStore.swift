@@ -357,8 +357,8 @@ public final class SampleStore {
                  cpu_percent, cpu_user, cpu_system, thread_count,
                  fd_total, fd_vnode, fd_socket, fd_pipe, fd_other,
                  disk_read, disk_written, data_source, footprint_readable, energy, energy_impact,
-                 net_total, gpu_time, gpu_percent)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 net_total, net_in, net_out, gpu_time, gpu_percent)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """)
         try statement.execute(
             arguments: [
@@ -373,6 +373,7 @@ public final class SampleStore {
                 s.dataSource.rawValue, s.footprintReadable,
                 SQLInt.store(s.energyNanojoules), s.energyImpact,
                 s.networkBytesPerSec,
+                s.networkInBytesPerSec, s.networkOutBytesPerSec,
                 SQLInt.store(s.gpuTimeNanos ?? 0), s.gpuPercent ?? 0,
             ])
     }

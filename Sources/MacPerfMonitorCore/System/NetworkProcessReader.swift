@@ -60,7 +60,7 @@ public final class NetworkProcessReader {
     private var prevCounters: [Int32: Counters] = [:]
     private var prevAt: Date?
     /// Latest per-PID byte rates (bytes/sec), read non-blocking by the sampler.
-    private var ratesCache: [Int32: Double] = [:]
+    private var ratesCache: [Int32: Rates] = [:]
 
     /// Dedicated background queue so the nettop one-shot never runs on the sampler's
     /// hot path.
@@ -90,9 +90,23 @@ public final class NetworkProcessReader {
         lock.unlock()
     }
 
-    /// The latest per-PID byte rates (bytes/sec) — read non-blocking on the sampler
-    /// queue. Empty until the second nettop sample lands (a rate needs two).
-    public func latestRates() -> [Int32: Double] {
+    /// Per-PID byte rates with the download/upload direction split the nettop
+    /// counters already carry. The sampler feeds both the headline figure (the
+    /// sum) and the split (the per-app byte history).
+    public struct Rates: Sendable, Equatable {
+        public var inBytesPerSec: Double
+        public var outBytesPerSec: Double
+        public var totalBytesPerSec: Double { inBytesPerSec + outBytesPerSec }
+
+        public init(inBytesPerSec: Double, outBytesPerSec: Double) {
+            self.inBytesPerSec = inBytesPerSec
+            self.outBytesPerSec = outBytesPerSec
+        }
+    }
+
+    /// The latest per-PID rates — read non-blocking on the sampler queue. Empty
+    /// until the second nettop sample lands (a rate needs two).
+    public func latestRates() -> [Int32: Rates] {
         lock.lock()
         defer { lock.unlock() }
         return ratesCache
@@ -120,14 +134,18 @@ public final class NetworkProcessReader {
             if let prevAt {
                 let dt = runAt.timeIntervalSince(prevAt)
                 if dt > 0 {
-                    var rates: [Int32: Double] = [:]
+                    var rates: [Int32: Rates] = [:]
                     rates.reserveCapacity(counters.count)
                     for (pid, cur) in counters {
                         guard let prev = prevCounters[pid] else { continue }
-                        let total =
-                            CPUMath.delta(cur.inBytes, prev.inBytes)
-                            &+ CPUMath.delta(cur.outBytes, prev.outBytes)
-                        if total > 0 { rates[pid] = Double(total) / dt }
+                        let inDelta = CPUMath.delta(cur.inBytes, prev.inBytes)
+                        let outDelta = CPUMath.delta(cur.outBytes, prev.outBytes)
+                        // Keep a process that only uploaded (backup daemons) or
+                        // only downloaded: a total-only gate would hide it.
+                        guard inDelta > 0 || outDelta > 0 else { continue }
+                        rates[pid] = Rates(
+                            inBytesPerSec: Double(inDelta) / dt,
+                            outBytesPerSec: Double(outDelta) / dt)
                     }
                     ratesCache = rates
                 }
