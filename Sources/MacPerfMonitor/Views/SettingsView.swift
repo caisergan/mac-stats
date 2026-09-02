@@ -401,6 +401,10 @@ private struct AdvancedSettingsView: View {
     /// that it uses a cheap one-shot `nettop` (it was opt-in when it ran a
     /// persistent one under a pty).
     @AppStorage(SamplerModel.perAppNetworkDefaultsKey) private var trackPerAppNetwork = true
+    /// Connection history: which remote hosts each app talks to. Off by
+    /// default because it is one more `nettop` run per cycle.
+    @AppStorage(SamplerModel.connectionHistoryDefaultsKey) private var recordConnections =
+        false
     /// The host the network menu pings for its latency/jitter read-out.
     @AppStorage(LatencyMonitor.hostKey) private var latencyHost = LatencyMonitor.defaultHost
     /// The live on-disk size, refreshed when the tab appears.
@@ -425,6 +429,10 @@ private struct AdvancedSettingsView: View {
                 Toggle("Track per-app network usage", isOn: $trackPerAppNetwork)
                 caption(
                     "Attribute network traffic to individual apps, so the Analytics tab and the network menu can show which apps are using the network. It samples the system's \u{201C}nettop\u{201D} tool briefly each refresh; the overall download and upload rates are always shown regardless."
+                )
+                Toggle("Record connection history", isOn: $recordConnections)
+                caption(
+                    "Record which remote hosts each app talks to, shown on the Network tab's History panel. Runs the system's \u{201C}nettop\u{201D} tool once every 30 seconds in the background; turn off to stop recording. Hostnames resolve on view, and an optional offline GeoLite2 database adds country names."
                 )
                 LabeledContent("Latency ping host") {
                     TextField(LatencyMonitor.defaultHost, text: $latencyHost)

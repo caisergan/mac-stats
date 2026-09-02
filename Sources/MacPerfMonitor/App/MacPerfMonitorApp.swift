@@ -415,6 +415,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
         // the same live-from-UserDefaults pattern the menubar items use.
         model.setPerAppNetworkTracking(
             UserDefaults.standard.bool(forKey: SamplerModel.perAppNetworkDefaultsKey))
+        // Connection history recording is opt-in (one more `nettop` run per
+        // cycle), so register the default off and apply it like the per-app
+        // toggle.
+        UserDefaults.standard.register(
+            defaults: [SamplerModel.connectionHistoryDefaultsKey: false])
+        model.setConnectionHistory(
+            UserDefaults.standard.bool(forKey: SamplerModel.connectionHistoryDefaultsKey))
         // Apply the saved process-table interval (default 10 s) and keep it in sync
         // with the Settings control live.
         model.setTableInterval(UserDefaults.standard.double(forKey: SamplerModel.tableIntervalKey))
@@ -428,6 +435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
             .sink { [weak model] _ in
                 model?.setPerAppNetworkTracking(
                     UserDefaults.standard.bool(forKey: SamplerModel.perAppNetworkDefaultsKey))
+                model?.setConnectionHistory(
+                    UserDefaults.standard.bool(
+                        forKey: SamplerModel.connectionHistoryDefaultsKey))
                 model?.setTableInterval(
                     UserDefaults.standard.double(forKey: SamplerModel.tableIntervalKey))
                 model?.setHighResInterval(

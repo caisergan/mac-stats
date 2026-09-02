@@ -2512,6 +2512,7 @@ final class SamplerModel: ObservableObject {
         cachedThermalEvents = nil
         cachedLeakSeries = nil
         cachedConsumerSeries = nil
+        cachedNetworkHistory.removeAll(keepingCapacity: false)
     }
 
     private static func buildGroupReport(
@@ -2566,6 +2567,108 @@ final class SamplerModel: ObservableObject {
                 }
                 completion(rows)
             }
+        }
+    }
+
+    // MARK: - Network history
+
+    /// One read of everything the Network history panel shows, for one period.
+    struct NetworkHistoryBundle {
+        var totals = NetworkHistoryTotals(downloaded: 0, uploaded: 0)
+        var series: [NetworkUsagePoint] = []
+        var interfaces: [InterfaceUsage] = []
+        var apps: [NetworkAppUsage] = []
+        var connections: [ConnectionUsage] = []
+    }
+
+    private var cachedNetworkHistory:
+        [NetworkHistoryPeriod: (at: Date, bundle: NetworkHistoryBundle)] = [:]
+
+    /// Load the network history bundle off `readQueue`, cached for the same
+    /// short TTL as the other history reads, delivered back on main.
+    /// `forceReload` bypasses the cache (the Clear action).
+    func loadNetworkHistory(
+        _ period: NetworkHistoryPeriod, forceReload: Bool = false,
+        completion: @escaping (NetworkHistoryBundle) -> Void
+    ) {
+        guard let store else {
+            completion(NetworkHistoryBundle())
+            return
+        }
+        readQueue.async {
+            if forceReload {
+                self.cachedNetworkHistory[period] = nil
+            }
+            let bundle = self.currentNetworkHistory(store, period: period)
+            DispatchQueue.main.async { completion(bundle) }
+        }
+    }
+
+    /// One interface's per-period series, for the interface-filtered chart.
+    /// Uncached like the per-app series.
+    func loadInterfaceUsageSeries(
+        _ name: String, _ period: NetworkHistoryPeriod,
+        completion: @escaping ([NetworkUsagePoint]) -> Void
+    ) {
+        guard let store else {
+            completion([])
+            return
+        }
+        readQueue.async {
+            let points = (try? store.interfaceUsageSeries(name, period)) ?? []
+            DispatchQueue.main.async { completion(points) }
+        }
+    }
+
+    /// Must run on `readQueue`.
+    private func currentNetworkHistory(
+        _ store: SampleStore, period: NetworkHistoryPeriod
+    ) -> NetworkHistoryBundle {
+        if let hit = cachedNetworkHistory[period],
+            Date().timeIntervalSince(hit.at) < systemHistoryMaxAge
+        {
+            return hit.bundle
+        }
+        var bundle = NetworkHistoryBundle()
+        bundle.totals =
+            (try? store.networkBytesTransferred(period))
+            ?? NetworkHistoryTotals(downloaded: 0, uploaded: 0)
+        bundle.series = (try? store.networkUsageSeries(period)) ?? []
+        bundle.interfaces = (try? store.interfaceUsage(period)) ?? []
+        bundle.apps = (try? store.networkAppUsage(period)) ?? []
+        bundle.connections = (try? store.connectionUsage(period)) ?? []
+        cachedNetworkHistory[period] = (Date(), bundle)
+        return bundle
+    }
+
+    /// One app's per-period series, for the expanded per-app row. Uncached.
+    func loadNetworkAppUsageSeries(
+        executablePath: String?, bundleID: String?, _ period: NetworkHistoryPeriod,
+        completion: @escaping ([NetworkUsagePoint]) -> Void
+    ) {
+        guard let store else {
+            completion([])
+            return
+        }
+        readQueue.async {
+            let points =
+                (try? store.networkAppUsageSeries(
+                    executablePath: executablePath, bundleID: bundleID, period)) ?? []
+            DispatchQueue.main.async { completion(points) }
+        }
+    }
+
+    /// Erase the network byte totals and connection/interface history, keeping
+    /// every other metric. Drops the history caches so panels reload empty.
+    func clearNetworkHistoryData(completion: @escaping () -> Void) {
+        guard let store else {
+            completion()
+            return
+        }
+        readQueue.async {
+            try? store.clearNetworkHistory()
+            self.clearHistoryCaches()
+            DispatchQueue.main.async { completion() }
         }
     }
 
