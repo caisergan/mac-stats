@@ -62,7 +62,7 @@ struct NetworkMenuBarContentView: View {
     // MARK: - Header
 
     private var header: some View {
-        let rates = model.smoothedNetworkRates
+        let rates = model.networkRates
         return Button(action: openNetwork) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 16) {

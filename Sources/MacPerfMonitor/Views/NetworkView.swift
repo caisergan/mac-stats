@@ -150,7 +150,7 @@ struct NetworkView: View {
     // MARK: - Header
 
     private var header: some View {
-        let rates = model.smoothedNetworkRates
+        let rates = model.networkRates
         return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(info.hostName ?? t("This Mac"))

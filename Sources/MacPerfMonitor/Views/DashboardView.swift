@@ -86,7 +86,7 @@ struct DashboardView: View {
             guard appState.mainWindowVisible, let model else { return }
             timeline.append(
                 model.liveSystem, cpu: model.smoothedCPU,
-                networkRates: model.smoothedNetworkRates, diskRates: model.smoothedDiskRates,
+                networkRates: model.networkRates, diskRates: model.diskRates,
                 disk: model.latestDisk)
             appendThermalPoint(model)
         }

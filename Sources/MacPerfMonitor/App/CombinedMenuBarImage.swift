@@ -108,7 +108,7 @@ enum CombinedMenuBarReadouts {
             }
 
         case .network:
-            let rates = model.smoothedNetworkRates
+            let rates = model.networkRates
             let down = rates?.inBytesPerSec ?? 0
             let up = rates?.outBytesPerSec ?? 0
             return CombinedMenuBarReadout(
@@ -118,7 +118,7 @@ enum CombinedMenuBarReadouts {
                 primaryBytesPerSec: down, secondaryBytesPerSec: up)
 
         case .disk:
-            let rates = model.smoothedDiskRates
+            let rates = model.diskRates
             let read = rates?.readBytesPerSec ?? 0
             let write = rates?.writeBytesPerSec ?? 0
             return CombinedMenuBarReadout(
