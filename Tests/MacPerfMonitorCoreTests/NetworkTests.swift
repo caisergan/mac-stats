@@ -267,21 +267,40 @@ final class NetworkTests: XCTestCase {
 
     // MARK: - nettop pacing
 
-    /// The refresh loop must never respawn nettop back-to-back: fast runs sleep
-    /// out to the fixed floor, and slow runs (5–17 s observed on some machines,
-    /// docs/fd-count-1620-diagnosis.md) pause twice their own duration so nettop
-    /// occupies at most ~1/3 of wall time.
-    func testPaceSleepFloorsFastRunsAndStretchesSlowOnes() {
-        // Fast machine: a 20 ms run sleeps out to the 2 s floor.
+    /// Interactive pacing buys freshness with spawns: the floor's remainder and
+    /// nothing more, so the measured ~5 s run lands a reading every 5 s.
+    func testInteractivePaceSleepTargetsTheDisplayCadence() {
+        // Fast machine: a 20 ms run sleeps out to the 5 s floor.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 0.02), 1.98, accuracy: 0.001)
+            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, interactive: true), 4.98,
+            accuracy: 0.001)
         // Degenerate elapsed still pauses the full floor.
-        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 0), 2, accuracy: 0.001)
-        // At the floor the pause is already dominated by the adaptive term.
-        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 2), 4, accuracy: 0.001)
-        // The diagnosed machine: a 5.1 s run gives a ~15.3 s total cycle instead
-        // of an immediate respawn.
-        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 5.1), 10.2, accuracy: 0.001)
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 0, interactive: true), 5,
+            accuracy: 0.001)
+        // A run at the floor does not pause: the reading lands every 5 s.
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, interactive: true), 0,
+            accuracy: 0.001)
+    }
+
+    /// Background pacing must never respawn nettop back-to-back: fast runs
+    /// sleep out to the 30 s floor, and slow runs (5-17 s observed on some
+    /// machines, docs/fd-count-1620-diagnosis.md) pause twice their own
+    /// duration so nettop occupies at most ~1/3 of wall time.
+    func testBackgroundPaceSleepFloorsFastRunsAndStretchesSlowOnes() {
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, interactive: false), 29.98,
+            accuracy: 0.001)
+        // The measured ~5 s run gives a 30 s cycle, six times fewer spawns than
+        // running it back-to-back.
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, interactive: false), 24.9,
+            accuracy: 0.001)
+        // Past 10 s the adaptive term takes over from the floor.
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 17, interactive: false), 34,
+            accuracy: 0.001)
     }
 
     // MARK: - Rate formatting

@@ -69,6 +69,7 @@ struct NetworkView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         header
                         throughputPanel
+                        NetworkHistoryPanel()
                         adaptersPanel
                         configPanel
                         perAppPanel
@@ -489,9 +490,10 @@ private struct AdapterRow: View {
 
 // MARK: - Panel
 
-/// A titled, bordered card matching the Dashboard's panel chrome (which is
-/// private to that file), so the Network page reads as part of the same app.
-private struct NetworkPanel<Content: View>: View {
+/// A titled, bordered card matching the Dashboard's panel chrome, so the
+/// Network page (and its History panel, in NetworkHistoryView.swift) reads as
+/// part of the same app.
+struct NetworkPanel<Content: View>: View {
     let title: LocalizedStringKey
     let systemImage: String
     @ViewBuilder var content: () -> Content

@@ -4,6 +4,22 @@ Notable changes to Mac Performance Monitor. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Network history on the Network tab. Transferred amounts (not just rates)
+  are now recorded per bucket: totals for the machine, per interface, per app
+  and, with the new opt-in connection recording, per remote host. A History
+  panel offers Hour, 24 h, 7 d, 30 d and All periods, an interface picker, a
+  total and per-app chart, an expandable per-app table with a share sidebar,
+  CSV export, and a Clear action that erases the recorded network amounts
+  (including the interface and connection history) and nothing else.
+  Connection history rows show reverse-DNS hostnames and, when the optional
+  GeoLite2 database is installed (Scripts/fetch-geolite.sh), country flags.
+  Connection recording is off by default; it runs the system's nettop tool
+  once every 30 seconds while enabled.
+
 ## [1.7.0] - 2026-09-01
 
 ### Added

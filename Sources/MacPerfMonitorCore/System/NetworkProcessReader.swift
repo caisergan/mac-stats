@@ -15,10 +15,9 @@ import os.log
 /// `latestRates()`, so a slow nettop only makes the per-app network figures
 /// refresh less often — it no longer throttles sampling.
 ///
-/// `start()` launches the loop; `stop()` halts it. A hard timeout guards against a
-/// wedged nettop, and adaptive pacing (`paceSleep`) keeps it from spinning on fast
-/// machines *and* from respawning back-to-back on machines where one run takes
-/// longer than the fixed floor.
+/// `start()` launches the loop; `stop()` halts it. A hard timeout guards against
+/// a wedged nettop. Pacing (`paceSleep`) runs at two speeds depending on whether
+/// anything is displaying per-app rates; see `setInteractive`.
 /// `CPUMath.delta` clamps the occasional counter decrease (a flow closing, or a
 /// counter reset) to zero.
 public final class NetworkProcessReader {
@@ -34,33 +33,54 @@ public final class NetworkProcessReader {
 
     private static let log = Logger(subsystem: "uk.co.bzwrd.macperfmonitor", category: "nettop")
     private static let toolPath = "/usr/bin/nettop"
-    /// Don't run nettop more often than this even on a machine where it's fast,
-    /// so we don't spin spawning it. On slow machines `paceSleep` stretches the
-    /// interval further, keyed to the measured run duration.
-    static let minRefreshInterval: TimeInterval = 2
+    /// Cadence floor while something on screen is showing per-app rates.
+    static let interactiveRefreshInterval: TimeInterval = 5
+    /// Cadence floor when nothing is: the reader is then only feeding the
+    /// per-app byte history, which is bucketed to the minute, so anything under
+    /// half a bucket is resolution nobody can see.
+    static let backgroundRefreshInterval: TimeInterval = 30
 
-    /// How long to pause after a run that took `elapsed` seconds: enough that the
-    /// full cycle is at least `minRefreshInterval`, and at least twice the run
-    /// duration, so nettop occupies at most ~1/3 of wall time however slow it is.
-    /// A fixed floor alone degenerates on slow machines — a single run takes ~5 s
-    /// idle (~17 s under load) on some Macs, so the old `floor - elapsed` sleep
-    /// was never taken and the loop respawned nettop back-to-back, hundreds of
-    /// times an hour, exactly when the machine was already struggling
-    /// (docs/fd-count-1620-diagnosis.md). The cost is only staler per-app rates
-    /// on those machines; `refreshLoop` differences over actual elapsed time, so
-    /// the rates stay correct.
-    static func paceSleep(afterRunTaking elapsed: TimeInterval) -> TimeInterval {
-        max(minRefreshInterval - elapsed, 2 * elapsed)
+    /// How long to pause after a run that took `elapsed` seconds.
+    ///
+    /// Interactive: the floor's remainder and nothing more, so a machine where
+    /// a run takes about as long as the floor (measured ~5 s here) keeps nettop
+    /// running continuously and the figures land every five seconds. That is
+    /// what a visible read-out is worth.
+    ///
+    /// Background: the larger floor, plus at least twice the run duration so
+    /// nettop occupies at most ~1/3 of wall time however slow it gets. The
+    /// adaptive term is not optional here. A fixed floor alone degenerates on a
+    /// slow machine: a run takes ~5 s idle and ~17 s under load on some Macs,
+    /// so `floor - elapsed` stops binding and the loop respawns nettop
+    /// back-to-back, ~500-700 times an hour, exactly when the machine is
+    /// already struggling (docs/fd-count-1620-diagnosis.md). That document
+    /// measured the CPU per run at ~0.06 s and still called it out: the cost is
+    /// process-spawn churn and a full system socket walk, not cycles.
+    ///
+    /// Either way `refreshLoop` differences over the actual elapsed interval,
+    /// so the rates, and the byte totals integrated from them, stay exact at
+    /// any cadence. Only the peak-rate columns lose within-bucket detail.
+    static func paceSleep(
+        afterRunTaking elapsed: TimeInterval, interactive: Bool
+    ) -> TimeInterval {
+        if interactive { return max(0, interactiveRefreshInterval - elapsed) }
+        return max(backgroundRefreshInterval - elapsed, 2 * elapsed)
     }
 
-    private let lock = NSLock()
+    /// Signals the pause as well as guarding state, so promoting the reader to
+    /// interactive cuts a background pause short instead of leaving a freshly
+    /// opened panel waiting out the rest of it.
+    private let lock = NSCondition()
     private var wantRunning = false
+    private var interactive = false
+    /// Set when a pause should end early (a mode promotion, or `stop()`).
+    private var wakeEarly = false
     /// Previous cumulative counters and when they were sampled, to difference the
     /// next snapshot into rates.
     private var prevCounters: [Int32: Counters] = [:]
     private var prevAt: Date?
     /// Latest per-PID byte rates (bytes/sec), read non-blocking by the sampler.
-    private var ratesCache: [Int32: Double] = [:]
+    private var ratesCache: [Int32: Rates] = [:]
 
     /// Dedicated background queue so the nettop one-shot never runs on the sampler's
     /// hot path.
@@ -84,21 +104,70 @@ public final class NetworkProcessReader {
     public func stop() {
         lock.lock()
         wantRunning = false
+        wakeEarly = true
         prevCounters.removeAll()
         prevAt = nil
         ratesCache.removeAll()
+        lock.broadcast()
         lock.unlock()
     }
 
-    /// The latest per-PID byte rates (bytes/sec) — read non-blocking on the sampler
-    /// queue. Empty until the second nettop sample lands (a rate needs two).
-    public func latestRates() -> [Int32: Double] {
+    /// Tell the reader whether anything is displaying per-app rates right now
+    /// (a per-app surface in the main window, or the network menu bar popover).
+    /// Off, the loop drops to the background cadence, which is all the
+    /// minute-bucketed history needs. Safe from any queue.
+    ///
+    /// Promoting to interactive wakes the loop out of a background pause, so
+    /// opening a panel costs one nettop run rather than up to that pause plus
+    /// one.
+    public func setInteractive(_ interactive: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard interactive != self.interactive else { return }
+        self.interactive = interactive
+        if interactive {
+            wakeEarly = true
+            lock.broadcast()
+        }
+    }
+
+    /// Per-PID byte rates with the download/upload direction split the nettop
+    /// counters already carry. The sampler feeds both the headline figure (the
+    /// sum) and the split (the per-app byte history).
+    public struct Rates: Sendable, Equatable {
+        public var inBytesPerSec: Double
+        public var outBytesPerSec: Double
+        public var totalBytesPerSec: Double { inBytesPerSec + outBytesPerSec }
+
+        public init(inBytesPerSec: Double, outBytesPerSec: Double) {
+            self.inBytesPerSec = inBytesPerSec
+            self.outBytesPerSec = outBytesPerSec
+        }
+    }
+
+    /// The latest per-PID rates — read non-blocking on the sampler queue. Empty
+    /// until the second nettop sample lands (a rate needs two).
+    public func latestRates() -> [Int32: Rates] {
         lock.lock()
         defer { lock.unlock() }
         return ratesCache
     }
 
     // MARK: - Background refresh
+
+    /// Wait out `duration`, returning early when `setInteractive(true)` or
+    /// `stop()` asks for it. `NSCondition.wait(until:)` can also return
+    /// spuriously, so the deadline is rechecked rather than trusted.
+    private func pause(for duration: TimeInterval) {
+        guard duration > 0 else { return }
+        let deadline = Date().addingTimeInterval(duration)
+        lock.lock()
+        defer { lock.unlock() }
+        while !wakeEarly, wantRunning, Date() < deadline {
+            lock.wait(until: deadline)
+        }
+        wakeEarly = false
+    }
 
     private func refreshLoop() {
         while true {
@@ -109,9 +178,9 @@ public final class NetworkProcessReader {
 
             let runAt = Date()
             guard let output = Self.runOneShot() else {
-                // Transient failure / timeout — pause so a persistent failure can't
-                // spin this queue.
-                Thread.sleep(forTimeInterval: 2)
+                // Transient failure / timeout: pause so a persistent failure
+                // cannot spin this queue.
+                pause(for: 2)
                 continue
             }
             let counters = Self.parse(output: output)
@@ -120,14 +189,18 @@ public final class NetworkProcessReader {
             if let prevAt {
                 let dt = runAt.timeIntervalSince(prevAt)
                 if dt > 0 {
-                    var rates: [Int32: Double] = [:]
+                    var rates: [Int32: Rates] = [:]
                     rates.reserveCapacity(counters.count)
                     for (pid, cur) in counters {
                         guard let prev = prevCounters[pid] else { continue }
-                        let total =
-                            CPUMath.delta(cur.inBytes, prev.inBytes)
-                            &+ CPUMath.delta(cur.outBytes, prev.outBytes)
-                        if total > 0 { rates[pid] = Double(total) / dt }
+                        let inDelta = CPUMath.delta(cur.inBytes, prev.inBytes)
+                        let outDelta = CPUMath.delta(cur.outBytes, prev.outBytes)
+                        // Keep a process that only uploaded (backup daemons) or
+                        // only downloaded: a total-only gate would hide it.
+                        guard inDelta > 0 || outDelta > 0 else { continue }
+                        rates[pid] = Rates(
+                            inBytesPerSec: Double(inDelta) / dt,
+                            outBytesPerSec: Double(outDelta) / dt)
                     }
                     ratesCache = rates
                 }
@@ -136,13 +209,13 @@ public final class NetworkProcessReader {
             prevAt = runAt
             lock.unlock()
 
-            // Adaptive pacing: a floor on fast machines, and on slow ones a pause
-            // proportional to the run itself so nettop never respawns back-to-back.
+            // Two-speed pacing: the display cadence while someone is looking,
+            // the history cadence otherwise.
             let elapsed = Date().timeIntervalSince(runAt)
-            let pause = Self.paceSleep(afterRunTaking: elapsed)
-            if pause > 0 {
-                Thread.sleep(forTimeInterval: pause)
-            }
+            lock.lock()
+            let pause = Self.paceSleep(afterRunTaking: elapsed, interactive: interactive)
+            lock.unlock()
+            self.pause(for: pause)
         }
     }
 
@@ -151,8 +224,11 @@ public final class NetworkProcessReader {
     /// Run one `nettop -L 1` to a pipe and return its full output, or nil on
     /// failure / timeout. Logging mode (not the interactive curses UI). Reads on a
     /// background thread with a hard timeout so a wedged nettop can't stall the
-    /// refresh loop.
-    private static func runOneShot(timeout: TimeInterval = 15) -> String? {
+    /// refresh loop. The timeout must clear nettop's worst REAL run, not just a
+    /// wedged one: on some machines (measured, macOS 26) a single `-L 1` run
+    /// takes a deterministic ~30 s of wall time, so anything near the old 15 s
+    /// floor killed every cycle and the reader silently produced no rates.
+    private static func runOneShot(timeout: TimeInterval = 90) -> String? {
         guard FileManager.default.isExecutableFile(atPath: toolPath) else {
             log.error("nettop not found at \(toolPath, privacy: .public)")
             return nil
@@ -161,8 +237,12 @@ public final class NetworkProcessReader {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: toolPath)
             // -P per process · -x raw bytes (no unit scaling) · -J only the byte
-            // columns · -L 1 one logging sample then exit.
-            task.arguments = ["-P", "-x", "-J", "bytes_in,bytes_out", "-L", "1"]
+            // columns · -s 1 the sampling delay. The delay matters: without it
+            // nettop waits its (measured ~30 s on this class of machine) default
+            // interval before producing its first sample; -s 1 brings a one-shot
+            // run down to ~5 s, which is what paces the refresh below. · -L 1 one
+            // logging sample then exit.
+            task.arguments = ["-P", "-x", "-J", "bytes_in,bytes_out", "-s", "1", "-L", "1"]
             let outPipe = Pipe()
             task.standardOutput = outPipe
             task.standardError = FileHandle.nullDevice

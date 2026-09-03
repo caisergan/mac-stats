@@ -239,7 +239,7 @@ public enum Retention {
         // dense (its rows are never gated), so its plain AVG/COUNT is unchanged.
         try db.execute(
             sql: """
-                INSERT INTO process_minute (process_id, bucket, footprint_min, footprint_avg, footprint_max, cpu_avg, cpu_max, samples, fd_max, disk_read_max, disk_written_max, energy_avg, energy_max, net_avg, net_max, gpu_avg, gpu_max)
+                INSERT INTO process_minute (process_id, bucket, footprint_min, footprint_avg, footprint_max, cpu_avg, cpu_max, samples, fd_max, disk_read_max, disk_written_max, energy_avg, energy_max, net_avg, net_max, gpu_avg, gpu_max, net_in_sum, net_out_sum)
                 SELECT process_id, b,
                        MIN(phys_footprint),
                        CAST(SUM(phys_footprint * dt) / SUM(dt) AS INTEGER),
@@ -260,10 +260,12 @@ public enum Retention {
                        SUM(net_total * dt) / SUM(dt),
                        MAX(net_total),
                        SUM(gpu_percent * dt) / SUM(dt),
-                       MAX(gpu_percent)
+                       MAX(gpu_percent),
+                       SUM(net_in * dt),
+                       SUM(net_out * dt)
                 FROM (
                     SELECT process_id, phys_footprint, cpu_percent, energy_impact, net_total,
-                           gpu_percent, fd_total, disk_read, disk_written,
+                           net_in, net_out, gpu_percent, fd_total, disk_read, disk_written,
                            CAST(timestamp / \(b) AS INTEGER) * \(b) AS b,
                            MIN(
                              COALESCE(
@@ -290,12 +292,14 @@ public enum Retention {
                   net_avg = excluded.net_avg,
                   net_max = excluded.net_max,
                   gpu_avg = excluded.gpu_avg,
-                  gpu_max = excluded.gpu_max
+                  gpu_max = excluded.gpu_max,
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
                 """, arguments: [watermark, completeUpTo])
 
         try db.execute(
             sql: """
-                INSERT INTO system_minute (bucket, pressure_avg, pressure_max, app_avg, wired_avg, compressed_avg, cached_avg, swap_used_avg, cpu_avg, cpu_max, samples, battery_charge_avg, battery_power_avg, battery_health_avg, battery_cycles_max, battery_temp_avg, net_in_avg, net_in_max, net_out_avg, net_out_max, disk_read_avg, disk_read_max, disk_write_avg, disk_write_max, disk_read_iops_avg, disk_read_iops_max, disk_write_iops_avg, disk_write_iops_max, disk_read_latency_avg, disk_read_latency_max, disk_write_latency_avg, disk_write_latency_max, disk_util_avg, disk_util_max, boot_free_avg, boot_free_min, boot_total, gpu_util_avg, gpu_util_max, gpu_power_avg, gpu_power_max, ane_power_avg, ane_power_max, cpu_die_avg, cpu_die_max, gpu_die_avg, gpu_die_max, ssd_temp_avg, ssd_temp_max, fan_rpm_avg, fan_rpm_max, thermal_state_max, cpu_p_die_max, cpu_e_die_max, airflow_temp_max, skin_temp_max, wireless_temp_max, vrail_temp_max, other_temp_max)
+                INSERT INTO system_minute (bucket, pressure_avg, pressure_max, app_avg, wired_avg, compressed_avg, cached_avg, swap_used_avg, cpu_avg, cpu_max, samples, battery_charge_avg, battery_power_avg, battery_health_avg, battery_cycles_max, battery_temp_avg, net_in_avg, net_in_max, net_out_avg, net_out_max, disk_read_avg, disk_read_max, disk_write_avg, disk_write_max, disk_read_iops_avg, disk_read_iops_max, disk_write_iops_avg, disk_write_iops_max, disk_read_latency_avg, disk_read_latency_max, disk_write_latency_avg, disk_write_latency_max, disk_util_avg, disk_util_max, boot_free_avg, boot_free_min, boot_total, gpu_util_avg, gpu_util_max, gpu_power_avg, gpu_power_max, ane_power_avg, ane_power_max, cpu_die_avg, cpu_die_max, gpu_die_avg, gpu_die_max, ssd_temp_avg, ssd_temp_max, fan_rpm_avg, fan_rpm_max, thermal_state_max, cpu_p_die_max, cpu_e_die_max, airflow_temp_max, skin_temp_max, wireless_temp_max, vrail_temp_max, other_temp_max, net_in_sum, net_out_sum)
                 SELECT CAST(timestamp / \(b) AS INTEGER) * \(b) AS b,
                        AVG(pressure_percent), MAX(pressure_percent),
                        CAST(AVG(app_memory) AS INTEGER), CAST(AVG(wired) AS INTEGER),
@@ -303,7 +307,8 @@ public enum Retention {
                        CAST(AVG(swap_used) AS INTEGER), AVG(cpu_load), MAX(cpu_load), COUNT(*),
                        AVG(battery_charge), AVG(battery_power), AVG(battery_health),
                        MAX(battery_cycles), AVG(battery_temp),
-                       AVG(net_in), MAX(net_in), AVG(net_out), MAX(net_out),
+                       SUM(net_in * dt) / SUM(dt), MAX(net_in),
+                       SUM(net_out * dt) / SUM(dt), MAX(net_out),
                        AVG(disk_read), MAX(disk_read), AVG(disk_write), MAX(disk_write),
                        AVG(disk_read_iops), MAX(disk_read_iops),
                        AVG(disk_write_iops), MAX(disk_write_iops),
@@ -317,9 +322,27 @@ public enum Retention {
                        AVG(ssd_temp), MAX(ssd_temp), AVG(fan_rpm), MAX(fan_rpm),
                        MAX(thermal_state),
                        MAX(cpu_p_die), MAX(cpu_e_die), MAX(airflow_temp), MAX(skin_temp),
-                       MAX(wireless_temp), MAX(vrail_temp), MAX(other_temp)
-                FROM system_samples
-                WHERE timestamp >= ? AND timestamp < ?
+                       MAX(wireless_temp), MAX(vrail_temp), MAX(other_temp),
+                       SUM(net_in * dt), SUM(net_out * dt)
+                FROM (
+                    SELECT timestamp, pressure_percent, app_memory, wired, compressed,
+                           cached_files, swap_used, cpu_load, battery_charge, battery_power,
+                           battery_health, battery_cycles, battery_temp, net_in, net_out,
+                           disk_read, disk_write, disk_read_iops, disk_write_iops,
+                           disk_read_latency, disk_write_latency, disk_util, boot_free,
+                           boot_total, gpu_util, gpu_power, ane_power, cpu_die, gpu_die,
+                           ssd_temp, fan_rpm, thermal_state, cpu_p_die, cpu_e_die,
+                           airflow_temp, skin_temp, wireless_temp, vrail_temp, other_temp,
+                           CAST(timestamp / \(b) AS INTEGER) * \(b) AS b,
+                           MIN(
+                             COALESCE(
+                               LEAD(timestamp) OVER (ORDER BY timestamp),
+                               (CAST(timestamp / \(b) AS INTEGER) + 1) * \(b)),
+                             (CAST(timestamp / \(b) AS INTEGER) + 1) * \(b)
+                           ) - timestamp AS dt
+                    FROM system_samples
+                    WHERE timestamp >= ? AND timestamp < ?
+                )
                 GROUP BY b
                 ON CONFLICT(bucket) DO UPDATE SET
                   pressure_avg = excluded.pressure_avg, pressure_max = excluded.pressure_max,
@@ -364,7 +387,9 @@ public enum Retention {
                   skin_temp_max = excluded.skin_temp_max,
                   wireless_temp_max = excluded.wireless_temp_max,
                   vrail_temp_max = excluded.vrail_temp_max,
-                  other_temp_max = excluded.other_temp_max
+                  other_temp_max = excluded.other_temp_max,
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
                 """, arguments: [watermark, completeUpTo])
 
         try setMeta(db, "minute_watermark", completeUpTo)
@@ -379,7 +404,7 @@ public enum Retention {
 
         try db.execute(
             sql: """
-                INSERT INTO process_hour (process_id, bucket, footprint_min, footprint_avg, footprint_max, cpu_avg, cpu_max, samples, fd_max, disk_read_max, disk_written_max, energy_avg, energy_max, net_avg, net_max, gpu_avg, gpu_max)
+                INSERT INTO process_hour (process_id, bucket, footprint_min, footprint_avg, footprint_max, cpu_avg, cpu_max, samples, fd_max, disk_read_max, disk_written_max, energy_avg, energy_max, net_avg, net_max, gpu_avg, gpu_max, net_in_sum, net_out_sum)
                 SELECT process_id,
                        CAST(bucket / 3600 AS INTEGER) * 3600 AS b,
                        MIN(footprint_min),
@@ -396,7 +421,9 @@ public enum Retention {
                        SUM(net_avg * samples) / SUM(samples),
                        MAX(net_max),
                        SUM(gpu_avg * samples) / SUM(samples),
-                       MAX(gpu_max)
+                       MAX(gpu_max),
+                       SUM(net_in_sum),
+                       SUM(net_out_sum)
                 FROM process_minute
                 WHERE bucket >= ? AND bucket < ?
                 GROUP BY process_id, b
@@ -415,12 +442,14 @@ public enum Retention {
                   net_avg = excluded.net_avg,
                   net_max = excluded.net_max,
                   gpu_avg = excluded.gpu_avg,
-                  gpu_max = excluded.gpu_max
+                  gpu_max = excluded.gpu_max,
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
                 """, arguments: [watermark, completeUpTo])
 
         try db.execute(
             sql: """
-                INSERT INTO system_hour (bucket, pressure_avg, pressure_max, app_avg, wired_avg, compressed_avg, cached_avg, swap_used_avg, cpu_avg, cpu_max, samples, battery_charge_avg, battery_power_avg, battery_health_avg, battery_cycles_max, battery_temp_avg, net_in_avg, net_in_max, net_out_avg, net_out_max, disk_read_avg, disk_read_max, disk_write_avg, disk_write_max, disk_read_iops_avg, disk_read_iops_max, disk_write_iops_avg, disk_write_iops_max, disk_read_latency_avg, disk_read_latency_max, disk_write_latency_avg, disk_write_latency_max, disk_util_avg, disk_util_max, boot_free_avg, boot_free_min, boot_total, gpu_util_avg, gpu_util_max, gpu_power_avg, gpu_power_max, ane_power_avg, ane_power_max, cpu_die_avg, cpu_die_max, gpu_die_avg, gpu_die_max, ssd_temp_avg, ssd_temp_max, fan_rpm_avg, fan_rpm_max, thermal_state_max, cpu_p_die_max, cpu_e_die_max, airflow_temp_max, skin_temp_max, wireless_temp_max, vrail_temp_max, other_temp_max)
+                INSERT INTO system_hour (bucket, pressure_avg, pressure_max, app_avg, wired_avg, compressed_avg, cached_avg, swap_used_avg, cpu_avg, cpu_max, samples, battery_charge_avg, battery_power_avg, battery_health_avg, battery_cycles_max, battery_temp_avg, net_in_avg, net_in_max, net_out_avg, net_out_max, disk_read_avg, disk_read_max, disk_write_avg, disk_write_max, disk_read_iops_avg, disk_read_iops_max, disk_write_iops_avg, disk_write_iops_max, disk_read_latency_avg, disk_read_latency_max, disk_write_latency_avg, disk_write_latency_max, disk_util_avg, disk_util_max, boot_free_avg, boot_free_min, boot_total, gpu_util_avg, gpu_util_max, gpu_power_avg, gpu_power_max, ane_power_avg, ane_power_max, cpu_die_avg, cpu_die_max, gpu_die_avg, gpu_die_max, ssd_temp_avg, ssd_temp_max, fan_rpm_avg, fan_rpm_max, thermal_state_max, cpu_p_die_max, cpu_e_die_max, airflow_temp_max, skin_temp_max, wireless_temp_max, vrail_temp_max, other_temp_max, net_in_sum, net_out_sum)
                 SELECT CAST(bucket / 3600 AS INTEGER) * 3600 AS b,
                        SUM(pressure_avg * samples) / SUM(samples), MAX(pressure_max),
                        CAST(SUM(app_avg * samples) / SUM(samples) AS INTEGER),
@@ -477,7 +506,8 @@ public enum Retention {
                        MAX(thermal_state_max),
                        MAX(cpu_p_die_max), MAX(cpu_e_die_max), MAX(airflow_temp_max),
                        MAX(skin_temp_max), MAX(wireless_temp_max), MAX(vrail_temp_max),
-                       MAX(other_temp_max)
+                       MAX(other_temp_max),
+                       SUM(net_in_sum), SUM(net_out_sum)
                 FROM system_minute
                 WHERE bucket >= ? AND bucket < ?
                 GROUP BY b
@@ -524,9 +554,27 @@ public enum Retention {
                   skin_temp_max = excluded.skin_temp_max,
                   wireless_temp_max = excluded.wireless_temp_max,
                   vrail_temp_max = excluded.vrail_temp_max,
-                  other_temp_max = excluded.other_temp_max
+                  other_temp_max = excluded.other_temp_max,
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
                 """, arguments: [watermark, completeUpTo])
 
+        // Interface tiers ride the same watermark: minute buckets sum into
+        // hour buckets exactly like the system tier.
+        try db.execute(
+            sql: """
+                INSERT INTO interface_hour (interface, bucket, net_in_sum, net_out_sum)
+                SELECT interface,
+                       CAST(bucket / 3600 AS INTEGER) * 3600 AS b,
+                       SUM(net_in_sum),
+                       SUM(net_out_sum)
+                FROM interface_minute
+                WHERE bucket >= ? AND bucket < ?
+                GROUP BY interface, b
+                ON CONFLICT(interface, bucket) DO UPDATE SET
+                  net_in_sum = excluded.net_in_sum,
+                  net_out_sum = excluded.net_out_sum
+                """, arguments: [watermark, completeUpTo])
         try setMeta(db, "hour_watermark", completeUpTo)
     }
 
@@ -547,6 +595,8 @@ public enum Retention {
             ("system_minute", "bucket", nowTS - policy.minuteWindow),
             ("process_hour", "bucket", nowTS - policy.hourWindow),
             ("system_hour", "bucket", nowTS - policy.hourWindow),
+            ("interface_minute", "bucket", nowTS - policy.minuteWindow),
+            ("interface_hour", "bucket", nowTS - policy.hourWindow),
         ]
         let batchSize = 10_000
         let maximumDeletesPerPass = 500_000
@@ -579,6 +629,12 @@ public enum Retention {
         try pool.write { db in
             try pruneDimensionsIfDue(db, nowTS: nowTS, hourCutoff: nowTS - policy.hourWindow)
         }
+
+        try pool.write { db in
+            try db.execute(
+                sql: "DELETE FROM connection_stats WHERE day < ?",
+                arguments: [floor((nowTS - policy.hourWindow) / 86_400)])
+        }
     }
 
     static func trim(_ db: Database, nowTS: Double, policy: RetentionPolicy) throws {
@@ -595,7 +651,13 @@ public enum Retention {
         try db.execute(sql: "DELETE FROM system_minute WHERE bucket < ?", arguments: [minuteCutoff])
         try db.execute(sql: "DELETE FROM process_hour WHERE bucket < ?", arguments: [hourCutoff])
         try db.execute(sql: "DELETE FROM system_hour WHERE bucket < ?", arguments: [hourCutoff])
-
+        try db.execute(
+            sql: "DELETE FROM interface_minute WHERE bucket < ?", arguments: [minuteCutoff])
+        try db.execute(
+            sql: "DELETE FROM interface_hour WHERE bucket < ?", arguments: [hourCutoff])
+        try db.execute(
+            sql: "DELETE FROM connection_stats WHERE day < ?",
+            arguments: [floor((nowTS - policy.hourWindow) / 86_400)])
         try pruneDimensionsIfDue(db, nowTS: nowTS, hourCutoff: hourCutoff)
     }
 

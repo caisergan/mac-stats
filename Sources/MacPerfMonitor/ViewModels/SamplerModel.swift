@@ -656,11 +656,81 @@ final class SamplerModel: ObservableObject {
         queue.async { [weak self] in
             guard let self, enabled != self.perAppNetworkEnabled else { return }
             self.perAppNetworkEnabled = enabled
+            // A freshly installed reader starts at the background cadence, so
+            // forget what the last one was told or the next tick would see no
+            // change and leave a visible panel on the slow pace.
+            self.networkReaderInteractive = false
             self.scanQueue.async {
                 self.sampler.setNetworkProcessReader(enabled ? NetworkProcessReader() : nil)
             }
             if !enabled {
                 DispatchQueue.main.async { self.menuLists.update(.network, with: []) }
+            }
+        }
+    }
+
+    /// What the per-app network reader was last told about whether anything is
+    /// displaying its rates. Confined to `queue`.
+    private var networkReaderInteractive = false
+
+    /// Pace the per-app network reader for whoever is watching. The reader
+    /// exists whenever tracking is on, because the per-app byte history needs
+    /// it, but the five-second display cadence only earns its process-spawn
+    /// churn while a surface is actually showing those rates: the network menu
+    /// bar popover, or anything in the main window consuming the process list
+    /// (the Network tab's top-apps card, the process table). With nothing open
+    /// the reader feeds only the history, which is bucketed to the minute, so
+    /// it drops to the background cadence. Runs on `queue`.
+    private func updateNetworkReaderPacing(openPopoverKinds: Set<MenuListKind>) {
+        let interactive =
+            perAppNetworkEnabled && (processConsumers > 0 || openPopoverKinds.contains(.network))
+        guard interactive != networkReaderInteractive else { return }
+        networkReaderInteractive = interactive
+        scanQueue.async { [weak self] in
+            self?.sampler.setNetworkProcessInteractive(interactive)
+        }
+    }
+
+    /// UserDefaults key for recording connection history (remote hosts per
+    /// app). Off by default: it is one more `nettop` run per cycle, and the
+    /// per-app totals work without it.
+    static let connectionHistoryDefaultsKey = "recordConnectionHistory"
+
+    /// The opt-in per-connection reader. Installed on `queue` so toggling is
+    /// idempotent; the persist path drains its deltas, so the reader holds no
+    /// reference back to this model.
+    private var connectionHistoryReader: ConnectionHistoryReader?
+
+    /// Turn connection-history recording on or off. The reader runs its own
+    /// slow nettop cadence, off every sampling path.
+    func setConnectionHistory(_ enabled: Bool) {
+        queue.async { [weak self] in
+            guard let self, enabled != (self.connectionHistoryReader != nil) else { return }
+            if enabled {
+                let reader = ConnectionHistoryReader()
+                self.connectionHistoryReader = reader
+                reader.start()
+            } else {
+                // Take the last cycle's deltas before dropping the reader, so
+                // turning the toggle off does not discard traffic it recorded.
+                let remaining = self.connectionHistoryReader?.drainDeltas() ?? []
+                self.connectionHistoryReader?.stop()
+                self.connectionHistoryReader = nil
+                self.persistConnectionDeltas(remaining)
+            }
+        }
+    }
+
+    /// Write one drain's connection deltas on the scan queue. Call from `queue`.
+    private func persistConnectionDeltas(_ deltas: [ConnectionHistoryReader.Delta]) {
+        guard !deltas.isEmpty, let store else { return }
+        scanQueue.async {
+            do {
+                try store.recordConnectionDeltas(deltas)
+            } catch {
+                AppLog.sampler.error(
+                    "connection delta insert failed: \(String(describing: error), privacy: .public)"
+                )
             }
         }
     }
@@ -1017,6 +1087,7 @@ final class SamplerModel: ObservableObject {
         var openPopoverKinds = Set(popoverKindConsumers.filter { $0.value > 0 }.keys)
         if !perAppNetworkEnabled { openPopoverKinds.remove(.network) }
         let popoverOpen = !openPopoverKinds.isEmpty
+        updateNetworkReaderPacing(openPopoverKinds: openPopoverKinds)
         if popoverOpen {
             popoverTickCounter += 1
         } else {
@@ -1153,6 +1224,26 @@ final class SamplerModel: ObservableObject {
             if lastPersistAt.map({ now.timeIntervalSince($0) >= persistMinInterval }) ?? true {
                 lastPersistAt = now
                 persistStore = store
+            }
+            if persistStore != nil {
+                let at = now
+                // Exact bytes the network reader accumulated since the last
+                // drain, so no dt guard is needed: a sleep or a long pause
+                // simply contributes the bytes that really crossed the wire.
+                let interfaceBytes = sampler.drainInterfaceBytes()
+                if !interfaceBytes.isEmpty {
+                    scanQueue.async { [weak self] in
+                        guard let persistStore = self?.store else { return }
+                        do {
+                            try persistStore.recordInterfaceUsage(interfaceBytes, at: at)
+                        } catch {
+                            AppLog.sampler.error(
+                                "interface usage insert failed: \(String(describing: error), privacy: .public)"
+                            )
+                        }
+                    }
+                }
+                persistConnectionDeltas(connectionHistoryReader?.drainDeltas() ?? [])
             }
         }
         let persistBucket = persistStore == nil ? 0 : Self.configuredStandardResInterval()
@@ -2455,6 +2546,7 @@ final class SamplerModel: ObservableObject {
         cachedThermalEvents = nil
         cachedLeakSeries = nil
         cachedConsumerSeries = nil
+        cachedNetworkHistory.removeAll(keepingCapacity: false)
     }
 
     private static func buildGroupReport(
@@ -2509,6 +2601,108 @@ final class SamplerModel: ObservableObject {
                 }
                 completion(rows)
             }
+        }
+    }
+
+    // MARK: - Network history
+
+    /// One read of everything the Network history panel shows, for one period.
+    struct NetworkHistoryBundle {
+        var totals = NetworkHistoryTotals(downloaded: 0, uploaded: 0)
+        var series: [NetworkUsagePoint] = []
+        var interfaces: [InterfaceUsage] = []
+        var apps: [NetworkAppUsage] = []
+        var connections: [ConnectionUsage] = []
+    }
+
+    private var cachedNetworkHistory:
+        [NetworkHistoryPeriod: (at: Date, bundle: NetworkHistoryBundle)] = [:]
+
+    /// Load the network history bundle off `readQueue`, cached for the same
+    /// short TTL as the other history reads, delivered back on main.
+    /// `forceReload` bypasses the cache (the Clear action).
+    func loadNetworkHistory(
+        _ period: NetworkHistoryPeriod, forceReload: Bool = false,
+        completion: @escaping (NetworkHistoryBundle) -> Void
+    ) {
+        guard let store else {
+            completion(NetworkHistoryBundle())
+            return
+        }
+        readQueue.async {
+            if forceReload {
+                self.cachedNetworkHistory[period] = nil
+            }
+            let bundle = self.currentNetworkHistory(store, period: period)
+            DispatchQueue.main.async { completion(bundle) }
+        }
+    }
+
+    /// One interface's per-period series, for the interface-filtered chart.
+    /// Uncached like the per-app series.
+    func loadInterfaceUsageSeries(
+        _ name: String, _ period: NetworkHistoryPeriod,
+        completion: @escaping ([NetworkUsagePoint]) -> Void
+    ) {
+        guard let store else {
+            completion([])
+            return
+        }
+        readQueue.async {
+            let points = (try? store.interfaceUsageSeries(name, period)) ?? []
+            DispatchQueue.main.async { completion(points) }
+        }
+    }
+
+    /// Must run on `readQueue`.
+    private func currentNetworkHistory(
+        _ store: SampleStore, period: NetworkHistoryPeriod
+    ) -> NetworkHistoryBundle {
+        if let hit = cachedNetworkHistory[period],
+            Date().timeIntervalSince(hit.at) < systemHistoryMaxAge
+        {
+            return hit.bundle
+        }
+        var bundle = NetworkHistoryBundle()
+        bundle.totals =
+            (try? store.networkBytesTransferred(period))
+            ?? NetworkHistoryTotals(downloaded: 0, uploaded: 0)
+        bundle.series = (try? store.networkUsageSeries(period)) ?? []
+        bundle.interfaces = (try? store.interfaceUsage(period)) ?? []
+        bundle.apps = (try? store.networkAppUsage(period)) ?? []
+        bundle.connections = (try? store.connectionUsage(period)) ?? []
+        cachedNetworkHistory[period] = (Date(), bundle)
+        return bundle
+    }
+
+    /// One app's per-period series, for the expanded per-app row. Uncached.
+    func loadNetworkAppUsageSeries(
+        executablePath: String?, bundleID: String?, _ period: NetworkHistoryPeriod,
+        completion: @escaping ([NetworkUsagePoint]) -> Void
+    ) {
+        guard let store else {
+            completion([])
+            return
+        }
+        readQueue.async {
+            let points =
+                (try? store.networkAppUsageSeries(
+                    executablePath: executablePath, bundleID: bundleID, period)) ?? []
+            DispatchQueue.main.async { completion(points) }
+        }
+    }
+
+    /// Erase the network byte totals and connection/interface history, keeping
+    /// every other metric. Drops the history caches so panels reload empty.
+    func clearNetworkHistoryData(completion: @escaping () -> Void) {
+        guard let store else {
+            completion()
+            return
+        }
+        readQueue.async {
+            try? store.clearNetworkHistory()
+            self.clearHistoryCaches()
+            DispatchQueue.main.async { completion() }
         }
     }
 
