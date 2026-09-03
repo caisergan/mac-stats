@@ -152,11 +152,23 @@ enum MenuBarReadoutImage {
         let pxW = max(1, Int((width * scale).rounded()))
         let pxH = max(1, Int((height * scale).rounded()))
         guard
-            let rep = NSBitmapImageRep(
+            let deviceRep = NSBitmapImageRep(
                 bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH, bitsPerSample: 8,
                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                 bytesPerRow: 0, bitsPerPixel: 0)
         else { return NSImage(size: NSSize(width: width, height: height)) }
+        // Draw in Display P3, not device RGB.
+        //
+        // The system colours are defined in P3, and a view draws them into a
+        // backing store in the display's own space, where they keep that
+        // definition. Rendering off-screen into a device RGB bitmap converts
+        // them down on the way in, and the ones that live outside sRGB come
+        // back duller: systemGreen lands at P3 (0.407, 0.808, 0.404) instead of
+        // (0.556, 0.821, 0.515). Side by side with Stats, whose widgets are
+        // views, every colour in this app's bar read a shade flat, the battery
+        // fill most visibly. Tagging the bitmap P3 keeps the definition and
+        // leaves the conversion to whichever display shows it.
+        let rep = deviceRep.retagging(with: .displayP3) ?? deviceRep
         rep.size = NSSize(width: width, height: height)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
