@@ -13,6 +13,10 @@ struct PowerSample: Sendable, Equatable {
     var gpuWatts: Double?
     var aneWatts: Double?
     var cpuWatts: Double?
+    /// Memory and PCI draw, for the sensors panel. Same counters, same
+    /// subscription: the sensors list would otherwise need its own.
+    var ramWatts: Double?
+    var pciWatts: Double?
     /// From the "GPU Stats" state channels, when subscribed (see `GPUSample`).
     var gpuStates: [GPUPerformanceState]?
     var gpuActiveResidency: Double?
@@ -48,9 +52,13 @@ final class PowerReader {
         var gpu = 0.0
         var ane = 0.0
         var cpu = 0.0
+        var ram = 0.0
+        var pci = 0.0
         var sawGPU = false
         var sawANE = false
         var sawCPU = false
+        var sawRAM = false
+        var sawPCI = false
         var states: [GPUPerformanceState]?
         var active: Double?
         var throttled: Bool?
@@ -100,6 +108,12 @@ final class PowerReader {
                 if name.hasPrefix("ANE") {
                     ane += joules
                     sawANE = true
+                } else if name.hasPrefix("DRAM") {
+                    ram += joules
+                    sawRAM = true
+                } else if name.hasPrefix("PCI"), name.hasSuffix("Energy") {
+                    pci += joules
+                    sawPCI = true
                 }
             }
         }
@@ -107,6 +121,8 @@ final class PowerReader {
             gpuWatts: sawGPU ? gpu / dt : nil,
             aneWatts: sawANE ? ane / dt : nil,
             cpuWatts: sawCPU ? cpu / dt : nil,
+            ramWatts: sawRAM ? ram / dt : nil,
+            pciWatts: sawPCI ? pci / dt : nil,
             gpuStates: states,
             gpuActiveResidency: active,
             gpuThrottled: throttled,
@@ -225,15 +241,18 @@ private final class IOReportBindings {
         return array
     }
 
-    /// Only the GPU / ANE / CPU energy channels, so the subscription samples a
-    /// handful of counters instead of every power rail. Falls back to the full
-    /// set if the names don't resolve (correctness over the optimization).
+    /// Only the GPU / ANE / CPU / DRAM / PCI energy channels, so the
+    /// subscription samples a handful of counters instead of every power rail.
+    /// Falls back to the full set if the names don't resolve (correctness over
+    /// the optimization).
     func filteredEnergyChannelList(_ channels: CFMutableDictionary) -> [Any] {
         let array = channelList(channels)
         let kept = array.filter { element in
             guard let channel = element as? NSDictionary else { return false }
             let name = channelName(channel as CFDictionary)
-            return name == "GPU Energy" || name == "CPU Energy" || name.hasPrefix("ANE")
+            if name == "GPU Energy" || name == "CPU Energy" { return true }
+            if name.hasPrefix("ANE") || name.hasPrefix("DRAM") { return true }
+            return name.hasPrefix("PCI") && name.hasSuffix("Energy")
         }
         return kept.isEmpty ? array : kept
     }
