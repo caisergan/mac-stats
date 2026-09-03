@@ -10,8 +10,13 @@ import Foundation
 ///
 /// Every `reportInterval` seconds it logs the achieved tick rate against the
 /// target, the mean and worst cost of the system tick, the process scan and
-/// the main-thread publish, and how much CPU the process and its main thread
-/// used over the period. Off (and free) unless the default is set.
+/// the main-thread publish, the cadence the menu-bar read-outs actually redraw
+/// at, and how much CPU the process and its main thread used over the period.
+/// Off (and free) unless the default is set.
+///
+/// Read the CPU figures with the app in the state you mean to measure: an open
+/// window or panel puts a SwiftUI view graph on the main thread and dominates
+/// both numbers, so a menu-bar-only comparison needs everything closed.
 final class TickDiagnostics {
     static let defaultsKey = "diagnostics.tickStats"
 
@@ -29,6 +34,12 @@ final class TickDiagnostics {
     private var publishes = 0
     private var publishTotal: TimeInterval = 0
     private var publishMax: TimeInterval = 0
+    /// Ticks whose figures were pushed to the menu-bar read-outs. This is the
+    /// number a user compares against another monitor, and it is reported
+    /// separately from the tick rate so a regression that re-throttles the bar
+    /// (as the refresh dial once did, to 1.89 s at the 2 s setting) is visible
+    /// here rather than only to the eye.
+    private var uiPublishes = 0
     private var lastProcessCPU: TimeInterval
     private var lastMainCPU: TimeInterval
     /// The main thread's Mach port, captured at creation (the sampler model is
@@ -67,6 +78,14 @@ final class TickDiagnostics {
         lock.unlock()
     }
 
+    /// One visible refresh: a tick whose figures reached the menu-bar read-outs.
+    func recordUIPublish() {
+        guard enabled else { return }
+        lock.lock()
+        uiPublishes += 1
+        lock.unlock()
+    }
+
     func recordPublish(duration: TimeInterval) {
         guard enabled else { return }
         lock.lock()
@@ -90,11 +109,13 @@ final class TickDiagnostics {
             format:
                 "tick stats: %d ticks in %.1fs = %.2f Hz (target %.2f) | system tick mean %.2f ms max %.2f "
                 + "| %d scans mean %.1f ms max %.1f | publish mean %.2f ms max %.2f "
+                + "| menu bar refresh %d in %.1fs = every %.2fs "
                 + "| CPU process %.1f%% main thread %.1f%%",
             ticks, elapsed, Double(ticks) / elapsed, 1 / targetInterval,
             ticks > 0 ? systemTotal / Double(ticks) * 1000 : 0, systemMax * 1000,
             scans, scans > 0 ? scanTotal / Double(scans) * 1000 : 0, scanMax * 1000,
             publishes > 0 ? publishTotal / Double(publishes) * 1000 : 0, publishMax * 1000,
+            uiPublishes, elapsed, uiPublishes > 0 ? elapsed / Double(uiPublishes) : 0,
             (processCPU - lastProcessCPU) / elapsed * 100, (mainCPU - lastMainCPU) / elapsed * 100)
         ticks = 0
         systemTotal = 0
@@ -105,6 +126,7 @@ final class TickDiagnostics {
         publishes = 0
         publishTotal = 0
         publishMax = 0
+        uiPublishes = 0
         lock.unlock()
         periodStart = now
         lastProcessCPU = processCPU
