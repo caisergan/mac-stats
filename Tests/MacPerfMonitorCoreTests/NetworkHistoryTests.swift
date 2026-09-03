@@ -270,6 +270,116 @@ final class NetworkHistoryTests: XCTestCase {
         XCTAssertEqual(series[0].downloaded, 600, accuracy: 0.001)
     }
 
+    func testCoarsePeriodsIncludeTheNotYetRolledTail() throws {
+        // The 30 d and All periods are backed by the hour tier, which only
+        // finalises completed hours. Reading that tier alone put the chart and
+        // the app table up to an hour behind the totals read-out beside them
+        // (and left both empty for the first hour of a fresh database). Every
+        // read now walks the same tier spans: hour, then minute, then the raw
+        // tail no rollup has reached.
+        for offset in stride(from: 0.0, to: 60.0, by: 2.0) {
+            try store.insert(systemSample: systemTick(offset))
+        }
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(0),
+                processes: [processTick(0, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        let rolled = anchor.addingTimeInterval(120)
+        try Retention.run(store.databasePool, now: rolled)
+
+        // Fresh traffic above the minute watermark, in the raw tier only.
+        try store.insert(systemSample: systemTick(120))
+        try store.insert(systemSample: systemTick(122))
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(120),
+                processes: [processTick(120, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        let now = anchor.addingTimeInterval(124)
+
+        // 60 MB rolled into the minute tier, plus 4 s of raw tail.
+        let totals = try store.networkBytesTransferred(.all, now: now)
+        XCTAssertEqual(totals.downloaded, 64_000_000, accuracy: 1)
+
+        // The chart now sums to the same figure instead of showing nothing.
+        let series = try store.networkUsageSeries(.all, now: now)
+        XCTAssertEqual(
+            series.reduce(0) { $0 + $1.downloaded }, 64_000_000, accuracy: 1)
+
+        // The per-app table reaches the raw tail too: 60 s rolled at 1000 B/s
+        // plus 4 s of the raw row.
+        let apps = try store.networkAppUsage(.all, now: now)
+        XCTAssertEqual(apps.count, 1)
+        XCTAssertEqual(apps[0].downloaded, 64_000, accuracy: 1)
+        let appSeries = try store.networkAppUsageSeries(
+            executablePath: "/usr/local/bin/worker", bundleID: nil, .all, now: now)
+        XCTAssertEqual(
+            appSeries.reduce(0) { $0 + $1.downloaded }, 64_000, accuracy: 1)
+    }
+
+    func testRawGapDoesNotExtrapolateTheLastRateAcrossIt() throws {
+        // A gap in the raw tier (sleep, a quit, a paused sampler) must not
+        // multiply the last rate before it across the whole gap: the row's dt
+        // stops at the end of its own aggregate bucket, exactly as the minute
+        // rollup weights it. Unclamped, waking after ten hours booked ten
+        // hours of the pre-sleep rate as transferred bytes.
+        try store.insert(systemSample: systemTick(0))
+        try store.insert(systemSample: systemTick(36_000))
+        let now = anchor.addingTimeInterval(36_002)
+
+        let totals = try store.networkBytesTransferred(.all, now: now)
+        // 60 s of the pre-gap row (its bucket) + 2 s of the trailing row.
+        XCTAssertEqual(totals.downloaded, 62_000_000, accuracy: 1)
+        XCTAssertEqual(totals.uploaded, 31_000_000, accuracy: 1)
+
+        let series = try store.networkUsageSeries(.lastHour, now: now)
+        XCTAssertEqual(series.reduce(0) { $0 + $1.downloaded }, 2_000_000, accuracy: 1)
+    }
+
+    func testClearErasesInterfaceConnectionAndRawHistory() throws {
+        for offset in stride(from: 0.0, to: 60.0, by: 2.0) {
+            try store.insert(systemSample: systemTick(offset))
+        }
+        try store.insert(
+            Sampler.Snapshot(
+                system: systemTick(0),
+                processes: [processTick(0, pid: 1000, down: 1000)],
+                unreadableProcessCount: 0))
+        try store.recordInterfaceUsage(["en0": (600, 300)], at: anchor)
+        try store.recordConnectionDeltas([
+            ConnectionHistoryReader.Delta(
+                pid: 1000, remoteIP: "17.57.146.57", remotePort: 443,
+                inBytes: 1_000, outBytes: 200, timestamp: anchor)
+        ])
+        let rolled = anchor.addingTimeInterval(120)
+        try Retention.run(store.databasePool, now: rolled)
+        // Raw rows above the minute watermark, which no UPDATE of the rolled
+        // sums can reach.
+        try store.insert(systemSample: systemTick(120))
+
+        let clearedAt = anchor.addingTimeInterval(122)
+        try store.clearNetworkHistory(at: clearedAt)
+        let now = anchor.addingTimeInterval(124)
+
+        XCTAssertEqual(try store.networkBytesTransferred(.all, now: now).downloaded, 0)
+        XCTAssertTrue(try store.networkUsageSeries(.all, now: now).isEmpty)
+        XCTAssertTrue(try store.networkAppUsage(.all, now: now).isEmpty)
+        XCTAssertTrue(try store.interfaceUsage(.all, now: now).isEmpty)
+        XCTAssertTrue(try store.connectionUsage(.all, now: now).isEmpty)
+
+        // Another rollup pass must not resurrect the erased buckets from raw
+        // rows that are still on disk for the rate charts.
+        try Retention.run(store.databasePool, now: anchor.addingTimeInterval(240))
+        XCTAssertEqual(
+            try store.networkBytesTransferred(.all, now: anchor.addingTimeInterval(240))
+                .downloaded, 0)
+
+        // The shared rate history every other network chart draws survives.
+        let points = try store.systemHistory(.oneDay, now: now)
+        XCTAssertEqual(points.first?.networkInBytesPerSec ?? -1, 1_000_000, accuracy: 0.001)
+    }
+
     func testConnectionDeltasRoundTripAndGroupByRemoteAndApp() throws {
         try store.insert(
             Sampler.Snapshot(
