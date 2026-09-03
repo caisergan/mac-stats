@@ -87,7 +87,7 @@ public struct BatteryReader: Sendable {
                 desktop.adapterWatts = adapter[kIOPSPowerAdapterWattsKey] as? Int
                 desktop.adapterName = adapter["Name"] as? String
             }
-            desktop.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+            desktop.isLowPowerMode = LowPowerMode.isEnabled(onBattery: false)
             return desktop
         }
 
@@ -167,7 +167,7 @@ public struct BatteryReader: Sendable {
             sample.adapterWatts = adapter[kIOPSPowerAdapterWattsKey] as? Int
             sample.adapterName = adapter["Name"] as? String
         }
-        sample.isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        sample.isLowPowerMode = LowPowerMode.isEnabled(onBattery: !sample.isOnAC)
 
         return sample
     }

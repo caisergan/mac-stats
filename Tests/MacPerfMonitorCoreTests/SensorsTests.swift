@@ -142,3 +142,45 @@ final class SensorsTests: XCTestCase {
         XCTAssertEqual(Set(SensorKind.displayOrder), Set(SensorKind.allCases))
     }
 }
+
+/// Low Power Mode's reading of the power-management preferences. The live read
+/// needs a machine in a particular state; the pick from the preferences does
+/// not, and the pick is where the bug was.
+final class LowPowerModeTests: XCTestCase {
+    private func preferences(battery: Any?, ac: Any?) -> [String: Any] {
+        var result: [String: Any] = [:]
+        if let battery { result[LowPowerMode.batteryDomain] = ["LowPowerMode": battery] }
+        if let ac { result[LowPowerMode.acDomain] = ["LowPowerMode": ac] }
+        return result
+    }
+
+    func testReadsTheDomainForTheSourceInUse() {
+        let prefs = preferences(battery: 1, ac: 0)
+        XCTAssertEqual(LowPowerMode.enabled(in: prefs, source: LowPowerMode.batteryDomain), true)
+        XCTAssertEqual(LowPowerMode.enabled(in: prefs, source: LowPowerMode.acDomain), false)
+    }
+
+    /// "Off" has to come back as false rather than as nil, or the fallback to
+    /// the other domain would report the mode on while it is switched off.
+    func testAnExplicitZeroIsOffRatherThanAbsent() {
+        XCTAssertEqual(
+            LowPowerMode.enabled(
+                in: preferences(battery: 0, ac: nil),
+                source: LowPowerMode.batteryDomain), false)
+    }
+
+    func testAMissingDomainOrKeyIsUnknown() {
+        XCTAssertNil(
+            LowPowerMode.enabled(
+                in: preferences(battery: nil, ac: 1),
+                source: LowPowerMode.batteryDomain))
+        XCTAssertNil(
+            LowPowerMode.enabled(
+                in: [LowPowerMode.batteryDomain: [String: Any]()],
+                source: LowPowerMode.batteryDomain))
+        XCTAssertNil(
+            LowPowerMode.enabled(
+                in: preferences(battery: "yes", ac: nil),
+                source: LowPowerMode.batteryDomain))
+    }
+}
