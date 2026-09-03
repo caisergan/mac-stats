@@ -27,7 +27,7 @@ enum MenuBarWidgetStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     case speed
     /// A battery outline that fills with charge.
     case battery
-    /// The battery outline plus the figure beside it.
+    /// The battery outline with the charge and the time estimate beside it.
     case batteryDetails
     /// Free over used, each on its own row.
     case memory

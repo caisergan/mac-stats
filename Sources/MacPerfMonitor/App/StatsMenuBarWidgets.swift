@@ -634,83 +634,94 @@ enum StatsMenuBarWidgets {
     /// the AC bolt or plug punched out of the middle when a charger is attached.
     /// Stats' default here is monochrome: the fill only turns red below 20%.
     private static func battery(_ readout: CombinedMenuBarReadout, _ isDark: Bool) -> Cell {
-        let batterySize = CGSize(width: 22, height: 12)
-        let borderWidth: CGFloat = 1
-        // Outline + the terminal nub, as Stats accumulates it.
-        let width = batterySize.width + borderWidth * 2 + 2
+        Cell(width: batteryOutlineWidth) { originX in
+            translated(originX) { drawBatteryOutline(readout, isDark, x: 0) }
+        }
+    }
+
+    private static let batterySize = CGSize(width: 22, height: 12)
+    private static let batteryBorderWidth: CGFloat = 1
+    /// Outline + the terminal nub, as Stats accumulates it.
+    private static var batteryOutlineWidth: CGFloat {
+        batterySize.width + batteryBorderWidth * 2 + 2
+    }
+
+    /// The outline at `x` within the current cell, so it can be drawn on its
+    /// own or after the figures that describe it.
+    private static func drawBatteryOutline(
+        _ readout: CombinedMenuBarReadout, _ isDark: Bool, x originOffset: CGFloat
+    ) {
+        let batterySize = Self.batterySize
+        let borderWidth = Self.batteryBorderWidth
         let charge = readout.batteryCharge
         let isCharging = readout.isBatteryCharging
         let isOnAC = readout.isOnAC
         let isLowPowerMode = readout.isLowPowerMode
 
-        return Cell(width: width) { originX in
-            translated(originX) {
-                guard let context = NSGraphicsContext.current?.cgContext else { return }
-                let offset: CGFloat = 0.5
-                let batteryRadius: CGFloat = 2
-                let frame = NSBezierPath(
-                    roundedRect: NSRect(
-                        x: borderWidth + offset,
-                        y: ((Metrics.frameHeight - batterySize.height) / 2) + offset,
-                        width: batterySize.width - borderWidth,
-                        height: batterySize.height - borderWidth),
-                    xRadius: batteryRadius, yRadius: batteryRadius)
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let offset: CGFloat = 0.5
+        let batteryRadius: CGFloat = 2
+        let frame = NSBezierPath(
+            roundedRect: NSRect(
+                x: originOffset + borderWidth + offset,
+                y: ((Metrics.frameHeight - batterySize.height) / 2) + offset,
+                width: batterySize.width - borderWidth,
+                height: batterySize.height - borderWidth),
+            xRadius: batteryRadius, yRadius: batteryRadius)
 
-                textColor(isDark).withAlphaComponent(0.5).set()
-                frame.lineWidth = borderWidth
-                frame.stroke()
+        textColor(isDark).withAlphaComponent(0.5).set()
+        frame.lineWidth = borderWidth
+        frame.stroke()
 
-                // Positive terminal: a 2x4 nub with the outer corners rounded.
-                let nubRect = NSRect(
-                    x: frame.bounds.maxX + 1, y: frame.bounds.midY - 2, width: 2, height: 4)
-                let radius: CGFloat = 1
-                let nub = NSBezierPath()
-                nub.move(to: CGPoint(x: nubRect.minX, y: nubRect.minY))
-                nub.line(to: CGPoint(x: nubRect.maxX - radius, y: nubRect.minY))
-                nub.appendArc(
-                    withCenter: CGPoint(x: nubRect.maxX - radius, y: nubRect.minY + radius),
-                    radius: radius, startAngle: -90, endAngle: 0)
-                nub.line(to: CGPoint(x: nubRect.maxX, y: nubRect.maxY - radius))
-                nub.appendArc(
-                    withCenter: CGPoint(x: nubRect.maxX - radius, y: nubRect.maxY - radius),
-                    radius: radius, startAngle: 0, endAngle: 90)
-                nub.line(to: CGPoint(x: nubRect.minX, y: nubRect.maxY))
-                nub.close()
-                nub.fill()
+        // Positive terminal: a 2x4 nub with the outer corners rounded.
+        let nubRect = NSRect(
+            x: frame.bounds.maxX + 1, y: frame.bounds.midY - 2, width: 2, height: 4)
+        let radius: CGFloat = 1
+        let nub = NSBezierPath()
+        nub.move(to: CGPoint(x: nubRect.minX, y: nubRect.minY))
+        nub.line(to: CGPoint(x: nubRect.maxX - radius, y: nubRect.minY))
+        nub.appendArc(
+            withCenter: CGPoint(x: nubRect.maxX - radius, y: nubRect.minY + radius),
+            radius: radius, startAngle: -90, endAngle: 0)
+        nub.line(to: CGPoint(x: nubRect.maxX, y: nubRect.maxY - radius))
+        nub.appendArc(
+            withCenter: CGPoint(x: nubRect.maxX - radius, y: nubRect.maxY - radius),
+            radius: radius, startAngle: 0, endAngle: 90)
+        nub.line(to: CGPoint(x: nubRect.minX, y: nubRect.maxY))
+        nub.close()
+        nub.fill()
 
-                if let charge {
-                    let maxWidth = batterySize.width - offset * 2 - borderWidth * 2 - 1
-                    let innerOffset = -offset + borderWidth + 1
-                    let inner = NSBezierPath(
-                        roundedRect: NSRect(
-                            x: frame.bounds.origin.x + innerOffset,
-                            y: frame.bounds.origin.y + innerOffset,
-                            width: max(1, maxWidth * CGFloat(charge)),
-                            height: batterySize.height - offset * 2 - borderWidth * 2 - 1),
-                        xRadius: 1, yRadius: 1)
-                    batteryColor(
-                        charge, isDark: isDark, isLowPowerMode: isLowPowerMode,
-                        colored: readout.isColored
-                    ).set()
-                    inner.fill()
-                } else {
-                    let attributes: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                        .foregroundColor: textColor(isDark),
-                        .paragraphStyle: NSMutableParagraphStyle(),
-                    ]
-                    let rect = CGRect(
-                        x: frame.bounds.midX - 3, y: frame.bounds.midY - 4, width: 8, height: 12)
-                    NSAttributedString(string: "?", attributes: attributes).draw(with: rect)
-                }
+        if let charge {
+            let maxWidth = batterySize.width - offset * 2 - borderWidth * 2 - 1
+            let innerOffset = -offset + borderWidth + 1
+            let inner = NSBezierPath(
+                roundedRect: NSRect(
+                    x: frame.bounds.origin.x + innerOffset,
+                    y: frame.bounds.origin.y + innerOffset,
+                    width: max(1, maxWidth * CGFloat(charge)),
+                    height: batterySize.height - offset * 2 - borderWidth * 2 - 1),
+                xRadius: 1, yRadius: 1)
+            batteryColor(
+                charge, isDark: isDark, isLowPowerMode: isLowPowerMode,
+                colored: readout.isColored
+            ).set()
+            inner.fill()
+        } else {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: textColor(isDark),
+                .paragraphStyle: NSMutableParagraphStyle(),
+            ]
+            let rect = CGRect(
+                x: frame.bounds.midX - 3, y: frame.bounds.midY - 4, width: 8, height: 12)
+            NSAttributedString(string: "?", attributes: attributes).draw(with: rect)
+        }
 
-                if isOnAC {
-                    drawACIcon(
-                        context: context,
-                        center: CGPoint(x: frame.bounds.midX, y: frame.bounds.midY),
-                        height: 12, charging: isCharging, isDark: isDark)
-                }
-            }
+        if isOnAC {
+            drawACIcon(
+                context: context,
+                center: CGPoint(x: frame.bounds.midX, y: frame.bounds.midY),
+                height: 12, charging: isCharging, isDark: isDark)
         }
     }
 
@@ -777,51 +788,48 @@ enum StatsMenuBarWidgets {
         context.restoreGState()
     }
 
-    // MARK: - Battery details (Kit/Widgets/Battery.swift, BatteryDetailsWidget)
+    // MARK: - Battery details (Kit/Widgets/Battery.swift, `additional`)
 
-    /// The battery figure on its own: the percentage in 12pt, or the percentage
-    /// over the time estimate in 9pt when a time is known.
+    /// The charge and the time estimate beside the battery outline, which is
+    /// Stats' Battery widget with its `additional` setting on
+    /// "percentageAndTime": two 9pt rows to the left of the outline, its own
+    /// spacing between them, and the outline drawn exactly as it is on its own.
+    ///
+    /// FIXED: this drew the figures and no outline, contradicting its own
+    /// description, so choosing it traded the battery picture for the numbers
+    /// instead of having both.
+    ///
+    /// The time is the estimate to empty, or to full while charging. macOS
+    /// gives no estimate for the first minutes after a change of power source
+    /// and sometimes not at all, and Stats prints "n/a" for that rather than
+    /// dropping the row, so the widget keeps one width.
     private static func batteryDetails(_ readout: CombinedMenuBarReadout, _ isDark: Bool) -> Cell {
         let percentage = readout.value
-        let time = readout.batteryTimeText
-
-        let oneRowFont = NSFont.systemFont(ofSize: 12, weight: .regular)
-        let twoRowFont = NSFont.systemFont(ofSize: 9, weight: .regular)
-        let width: CGFloat =
-            if let time {
-                max(
-                    widthOfString(percentage, font: twoRowFont),
-                    widthOfString(time, font: twoRowFont)
-                ).rounded(.up)
-            } else {
-                widthOfString(percentage, font: oneRowFont).rounded(.up)
-            }
+        let time = readout.batteryTimeText ?? t("n/a")
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular)
+        // Reserved, not measured: "80%" over "11:09" must not resize into
+        // "100%" over "n/a" and shuffle the bar every time an estimate
+        // arrives or goes.
+        let rowsWidth = max(
+            widthOfString("100%", font: font), widthOfString("00:00", font: font)
+        ).rounded(.up)
+        let width = rowsWidth + Metrics.spacing + batteryOutlineWidth
 
         return Cell(width: width) { originX in
             translated(originX) {
-                guard let time else {
-                    let attributes: [NSAttributedString.Key: Any] = [
-                        .font: oneRowFont, .foregroundColor: textColor(isDark),
-                        .paragraphStyle: NSMutableParagraphStyle(),
-                    ]
-                    let rect = CGRect(
-                        x: Metrics.marginX, y: (Metrics.itemHeight - 12) / 2, width: width,
-                        height: 12)
-                    NSAttributedString(string: percentage, attributes: attributes).draw(with: rect)
-                    return
-                }
-
                 let style = NSMutableParagraphStyle()
                 style.alignment = .center
                 let attributes: [NSAttributedString.Key: Any] = [
-                    .font: twoRowFont, .foregroundColor: textColor(isDark), .paragraphStyle: style,
+                    .font: font, .foregroundColor: textColor(isDark), .paragraphStyle: style,
                 ]
                 let rowHeight = Metrics.frameHeight / 2
                 NSAttributedString(string: percentage, attributes: attributes).draw(
                     with: CGRect(
-                        x: Metrics.marginX, y: rowHeight + 1, width: width, height: rowHeight))
+                        x: Metrics.marginX, y: rowHeight + 1, width: rowsWidth, height: rowHeight))
                 NSAttributedString(string: time, attributes: attributes).draw(
-                    with: CGRect(x: Metrics.marginX, y: 1, width: width, height: rowHeight))
+                    with: CGRect(x: Metrics.marginX, y: 1, width: rowsWidth, height: rowHeight))
+
+                drawBatteryOutline(readout, isDark, x: rowsWidth + Metrics.spacing)
             }
         }
     }

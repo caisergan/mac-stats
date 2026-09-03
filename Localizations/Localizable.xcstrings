@@ -36163,6 +36163,23 @@
         }
       }
     },
+    "n/a": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "n/a"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不可用"
+          }
+        }
+      }
+    },
     "new": {
       "comment": "Disk Map (1.6.0)",
       "extractionState": "manual",
