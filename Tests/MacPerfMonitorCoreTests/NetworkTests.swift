@@ -267,21 +267,22 @@ final class NetworkTests: XCTestCase {
 
     // MARK: - nettop pacing
 
-    /// The refresh loop targets one nettop run every five seconds: fast runs
-    /// sleep out the remainder of the floor, and runs at or beyond it (a run
-    /// takes a measured ~5 s on this machine) pause nothing so the cadence is
-    /// as fresh as the platform allows.
-    func testPaceSleepTargetsTheFiveSecondCycle() {
+    /// The refresh loop must never respawn nettop back-to-back: fast runs sleep
+    /// out to the five-second floor, and slow runs (5-17 s observed on some
+    /// machines, docs/fd-count-1620-diagnosis.md) pause twice their own
+    /// duration so nettop occupies at most ~1/3 of wall time.
+    func testPaceSleepFloorsFastRunsAndStretchesSlowOnes() {
         // Fast machine: a 20 ms run sleeps out to the 5 s floor.
         XCTAssertEqual(
             NetworkProcessReader.paceSleep(afterRunTaking: 0.02), 4.98, accuracy: 0.001)
         // Degenerate elapsed still pauses the full floor.
         XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 0), 5, accuracy: 0.001)
-        // A short run idles out the remainder of the 5 s floor.
-        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 2), 3, accuracy: 0.001)
-        // A run at or beyond the floor (the measured ~5 s on this machine) does
-        // not pause: nettop runs back-to-back to keep the cadence.
-        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 5.1), 0, accuracy: 0.001)
+        // At 2 s the adaptive term already dominates the floor's remainder.
+        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 2), 4, accuracy: 0.001)
+        // The measured ~5 s run gives a 15 s cycle, not an immediate respawn.
+        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 5.1), 10.2, accuracy: 0.001)
+        // A machine under load backs off further still.
+        XCTAssertEqual(NetworkProcessReader.paceSleep(afterRunTaking: 17), 34, accuracy: 0.001)
     }
 
     // MARK: - Rate formatting

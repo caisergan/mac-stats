@@ -34,22 +34,30 @@ public final class NetworkProcessReader {
 
     private static let log = Logger(subsystem: "uk.co.bzwrd.macperfmonitor", category: "nettop")
     private static let toolPath = "/usr/bin/nettop"
-    /// Target cadence for one nettop run: a run starts every `minRefreshInterval`
-    /// seconds at most. On this class of machine a single run takes a measured
-    /// ~5 s wall (nettop's first sample waits its sampling interval), so the
-    /// floor and the run duration coincide and the loop runs nettop
-    /// continuously. A faster machine simply idles the remainder of the floor,
-    /// which also bounds respawns to at most 720/hour.
+    /// Target cadence for one nettop run on a machine where a run is cheap: a
+    /// run starts every `minRefreshInterval` seconds at most. Where a run costs
+    /// more than that, `paceSleep` stretches the interval further, keyed to the
+    /// measured run duration.
     static let minRefreshInterval: TimeInterval = 5
 
-    /// Pause so the full cycle is at least `minRefreshInterval`: the floor minus
-    /// the run when the run is shorter, nothing when the run already exceeds it.
-    /// Runs that stretch (a slow machine under load) therefore degrade the
-    /// cadence rather than stacking concurrent nettop processes, and
-    /// `refreshLoop` differences over actual elapsed time, so the rates stay
+    /// How long to pause after a run that took `elapsed` seconds: enough that
+    /// the full cycle is at least `minRefreshInterval`, and at least twice the
+    /// run duration, so nettop occupies at most ~1/3 of wall time however slow
+    /// it is.
+    ///
+    /// The adaptive term is not optional. A fixed floor alone degenerates on a
+    /// slow machine: a run takes ~5 s idle and ~17 s under load on some Macs,
+    /// so `floor - elapsed` is never taken and the loop respawns nettop
+    /// back-to-back, hundreds of times an hour, exactly when the machine is
+    /// already struggling (docs/fd-count-1620-diagnosis.md, TL;DR item 3).
+    /// With `-s 1` bringing a run to ~5 s the two terms now sit close together
+    /// anyway: a fast machine gets the full 5 s cadence the floor asks for, the
+    /// measured ~5 s machine a 15 s cycle, and only a genuinely struggling one
+    /// backs further off. The cost is staler per-app rates there;
+    /// `refreshLoop` differences over actual elapsed time, so they stay
     /// correct at any cadence.
     static func paceSleep(afterRunTaking elapsed: TimeInterval) -> TimeInterval {
-        max(0, minRefreshInterval - elapsed)
+        max(minRefreshInterval - elapsed, 2 * elapsed)
     }
 
     private let lock = NSLock()
