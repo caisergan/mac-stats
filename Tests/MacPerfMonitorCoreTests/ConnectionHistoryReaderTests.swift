@@ -59,6 +59,28 @@ final class ConnectionHistoryReaderTests: XCTestCase {
         XCTAssertEqual(deltas[0].remotePort, 5223)
     }
 
+    func testDiffCountsAFlowThatOpenedThisCycle() {
+        // A TCP flow's counters start at zero when the socket opens, so a key
+        // that is new relative to a non-empty baseline contributes its whole
+        // current count. Skipping it lost the first sighting of every
+        // connection, and lost short flows (most HTTPS requests) entirely.
+        let at = Date()
+        let previous: [ConnectionHistoryReader.Snapshot] = [
+            .init(pid: 150, remoteIP: "17.57.146.57", remotePort: 5223, inBytes: 1_000, outBytes: 0)
+        ]
+        let current: [ConnectionHistoryReader.Snapshot] = [
+            .init(
+                pid: 150, remoteIP: "17.57.146.57", remotePort: 5223, inBytes: 1_000, outBytes: 0),
+            .init(
+                pid: 508, remoteIP: "93.184.216.34", remotePort: 443, inBytes: 8_000, outBytes: 900),
+        ]
+        let deltas = ConnectionHistoryReader.diff(current: current, previous: previous, at: at)
+        XCTAssertEqual(deltas.count, 1, "the unchanged flow contributes nothing")
+        XCTAssertEqual(deltas[0].remoteIP, "93.184.216.34")
+        XCTAssertEqual(deltas[0].inBytes, 8_000)
+        XCTAssertEqual(deltas[0].outBytes, 900)
+    }
+
     func testDiffIgnoresFirstSightingAndCounterResets() {
         let at = Date()
         let current: [ConnectionHistoryReader.Snapshot] = [

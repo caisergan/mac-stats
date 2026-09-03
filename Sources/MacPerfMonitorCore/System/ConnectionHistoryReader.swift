@@ -12,10 +12,13 @@ import os.log
 /// Runs `nettop -m tcp -x -J bytes_in,bytes_out -L 1` one-shot on its own
 /// background queue at a slow fixed cadence (default 30 s: connection history
 /// is a retrospective view, not a live meter), differences consecutive
-/// cumulative snapshots per (pid, remote endpoint) into byte deltas, and hands
-/// them to `onDeltas` on its own queue. A connection that closes between two
-/// runs loses its final sub-cadence bytes; counters that reset (a flow
-/// closing, a reused endpoint) clamp to zero like every other delta here.
+/// cumulative snapshots per (pid, remote endpoint) into byte deltas, and parks
+/// them for `drainDeltas()` — the same non-blocking cache the other nettop
+/// reader hands the sampler through `latestRates()`. The consumer therefore
+/// writes on its own persist cadence, off this queue, and the reader owns no
+/// reference to it. A connection that closes between two runs loses its final
+/// sub-cadence bytes; counters that reset (a flow closing, a reused endpoint)
+/// clamp to zero like every other delta here.
 ///
 /// UDP is intentionally not collected: an unconnected UDP socket has no remote
 /// endpoint to attribute traffic to, so its bytes already appear in the
@@ -61,18 +64,27 @@ public final class ConnectionHistoryReader {
     private var wantRunning = false
     private var prevSnapshots: [Snapshot] = []
     private let cadence: TimeInterval
-    /// Called on the reader's background queue with the deltas of one cycle.
-    /// Install before `start()`; never invoked concurrently.
-    private let onDeltas: @Sendable ([Delta]) -> Void
+    /// Deltas recorded since the last `drainDeltas()`. Bounded so a consumer
+    /// that stops draining (a wedged persist path) cannot grow it without
+    /// limit; the oldest cycles are the ones dropped.
+    private var pendingDeltas: [Delta] = []
+    private static let maximumPendingDeltas = 20_000
 
     private let refreshQueue = DispatchQueue(
         label: "uk.co.bzwrd.macperfmonitor.nettop-conn", qos: .utility)
 
-    public init(
-        cadence: TimeInterval = 30, onDeltas: @escaping @Sendable ([Delta]) -> Void
-    ) {
+    public init(cadence: TimeInterval = 30) {
         self.cadence = max(cadence, 5)
-        self.onDeltas = onDeltas
+    }
+
+    /// Take and clear the deltas recorded since the last call. Safe from any
+    /// queue; empty until the second cycle (a delta needs two snapshots).
+    public func drainDeltas() -> [Delta] {
+        lock.lock()
+        defer { lock.unlock() }
+        let deltas = pendingDeltas
+        pendingDeltas.removeAll(keepingCapacity: true)
+        return deltas
     }
 
     /// Start the background collection loop. Idempotent.
@@ -86,7 +98,8 @@ public final class ConnectionHistoryReader {
     }
 
     /// Stop the loop and drop the counter state, so re-enabling starts with a
-    /// clean baseline instead of one giant delta across the off period.
+    /// clean baseline instead of one giant delta across the off period. Already
+    /// recorded deltas are kept for a final `drainDeltas()`.
     public func stop() {
         lock.lock()
         wantRunning = false
@@ -113,11 +126,13 @@ public final class ConnectionHistoryReader {
 
             lock.lock()
             prevSnapshots = snapshots
+            if !deltas.isEmpty {
+                let overflow = pendingDeltas.count + deltas.count - Self.maximumPendingDeltas
+                if overflow > 0 { pendingDeltas.removeFirst(min(overflow, pendingDeltas.count)) }
+                pendingDeltas.append(contentsOf: deltas)
+            }
             lock.unlock()
 
-            if !deltas.isEmpty {
-                onDeltas(deltas)
-            }
             let elapsed = Date().timeIntervalSince(at)
             Thread.sleep(forTimeInterval: max(cadence - elapsed, cadence / 2))
         }
@@ -126,11 +141,23 @@ public final class ConnectionHistoryReader {
     /// Difference the cumulative per-connection counters. Rows are summed per
     /// (pid, remote) key first, because parallel connections to the same
     /// remote endpoint are legal and must not steal each other's baseline.
+    ///
+    /// A key absent from `previous` is a flow that opened during this cycle, so
+    /// its baseline is zero and its whole current count is this cycle's
+    /// traffic. Treating it as "no baseline, skip" loses the first sighting of
+    /// every connection, and loses short flows entirely: most HTTPS requests
+    /// open and close well inside one cycle, so the table would have shown a
+    /// small fraction of real traffic. The exception is the first cycle after
+    /// `start()`, where `previous` is empty and every long-lived flow would
+    /// otherwise dump its entire lifetime into one bucket; that cycle only
+    /// establishes the baseline.
+    ///
     /// Keys that vanished are dropped (their sub-cycle tail is lost, the price
     /// of snapshot differencing); counter decreases clamp to zero.
     static func diff(
         current: [Snapshot], previous: [Snapshot], at: Date
     ) -> [Delta] {
+        guard !previous.isEmpty else { return [] }
         let previousTotals = totals(previous)
         func totals(_ rows: [Snapshot]) -> [String: (inBytes: UInt64, outBytes: UInt64)] {
             var result: [String: (inBytes: UInt64, outBytes: UInt64)] = [:]
@@ -155,9 +182,8 @@ public final class ConnectionHistoryReader {
         var deltas: [Delta] = []
         deltas.reserveCapacity(currentTotals.count)
         for (rowKey, current) in currentTotals {
-            guard let row = representative[rowKey], let prev = previousTotals[rowKey] else {
-                continue
-            }
+            guard let row = representative[rowKey] else { continue }
+            let prev = previousTotals[rowKey] ?? (inBytes: 0, outBytes: 0)
             let inDelta = CPUMath.delta(current.inBytes, prev.inBytes)
             let outDelta = CPUMath.delta(current.outBytes, prev.outBytes)
             guard inDelta > 0 || outDelta > 0 else { continue }

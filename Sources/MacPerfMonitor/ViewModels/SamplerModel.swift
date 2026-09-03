@@ -671,7 +671,8 @@ final class SamplerModel: ObservableObject {
     static let connectionHistoryDefaultsKey = "recordConnectionHistory"
 
     /// The opt-in per-connection reader. Installed on `queue` so toggling is
-    /// idempotent; its deltas hop back through `queue` to reach `store`.
+    /// idempotent; the persist path drains its deltas, so the reader holds no
+    /// reference back to this model.
     private var connectionHistoryReader: ConnectionHistoryReader?
 
     /// Turn connection-history recording on or off. The reader runs its own
@@ -680,24 +681,30 @@ final class SamplerModel: ObservableObject {
         queue.async { [weak self] in
             guard let self, enabled != (self.connectionHistoryReader != nil) else { return }
             if enabled {
-                let reader = ConnectionHistoryReader { [weak self] deltas in
-                    guard let self else { return }
-                    self.queue.async {
-                        guard let store = self.store else { return }
-                        do {
-                            try store.recordConnectionDeltas(deltas)
-                        } catch {
-                            AppLog.sampler.error(
-                                "connection delta insert failed: \(String(describing: error), privacy: .public)"
-                            )
-                        }
-                    }
-                }
+                let reader = ConnectionHistoryReader()
                 self.connectionHistoryReader = reader
                 reader.start()
             } else {
+                // Take the last cycle's deltas before dropping the reader, so
+                // turning the toggle off does not discard traffic it recorded.
+                let remaining = self.connectionHistoryReader?.drainDeltas() ?? []
                 self.connectionHistoryReader?.stop()
                 self.connectionHistoryReader = nil
+                self.persistConnectionDeltas(remaining)
+            }
+        }
+    }
+
+    /// Write one drain's connection deltas on the scan queue. Call from `queue`.
+    private func persistConnectionDeltas(_ deltas: [ConnectionHistoryReader.Delta]) {
+        guard !deltas.isEmpty, let store else { return }
+        scanQueue.async {
+            do {
+                try store.recordConnectionDeltas(deltas)
+            } catch {
+                AppLog.sampler.error(
+                    "connection delta insert failed: \(String(describing: error), privacy: .public)"
+                )
             }
         }
     }
@@ -1209,6 +1216,7 @@ final class SamplerModel: ObservableObject {
                         }
                     }
                 }
+                persistConnectionDeltas(connectionHistoryReader?.drainDeltas() ?? [])
             }
         }
         let persistBucket = persistStore == nil ? 0 : Self.configuredStandardResInterval()

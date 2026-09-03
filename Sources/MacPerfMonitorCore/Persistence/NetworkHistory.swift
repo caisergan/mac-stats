@@ -774,8 +774,8 @@ extension SampleStore {
                     executablePath: $0["path"] as String?,
                     downloaded: SQLInt.read($0["din"] as Int64? ?? 0),
                     uploaded: SQLInt.read($0["dout"] as Int64? ?? 0),
-                    firstTransfer: Date(timeIntervalSince1970: $0["first"] as Double ?? 0),
-                    lastTransfer: Date(timeIntervalSince1970: $0["last"] as Double ?? 0))
+                    firstTransfer: Date(timeIntervalSince1970: $0["first"] as Double),
+                    lastTransfer: Date(timeIntervalSince1970: $0["last"] as Double))
             }
         }
     }
