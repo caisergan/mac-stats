@@ -1187,27 +1187,26 @@ final class SamplerModel: ObservableObject {
         var persistStore: SampleStore?
         if scanDue, persistenceEnabled, let store {
             let now = Date()
-            let persistDt = lastPersistAt.map { now.timeIntervalSince($0) }
             if lastPersistAt.map({ now.timeIntervalSince($0) >= persistMinInterval }) ?? true {
                 lastPersistAt = now
                 persistStore = store
             }
             if persistStore != nil {
                 let at = now
-                scanQueue.async { [weak self] in
-                    guard let self else { return }
-                    guard let persistStore = self.store else { return }
-                    do {
-                        // A stale dt (sleep, long pause) would multiply stale
-                        // rates into a phantom dump, so bound it.
-                        if let dt = persistDt, dt > 0, dt < 300 {
-                            try persistStore.recordInterfaceUsage(
-                                self.sampler.perInterfaceRates(), dt: dt, at: at)
+                // Exact bytes the network reader accumulated since the last
+                // drain, so no dt guard is needed: a sleep or a long pause
+                // simply contributes the bytes that really crossed the wire.
+                let interfaceBytes = sampler.drainInterfaceBytes()
+                if !interfaceBytes.isEmpty {
+                    scanQueue.async { [weak self] in
+                        guard let persistStore = self?.store else { return }
+                        do {
+                            try persistStore.recordInterfaceUsage(interfaceBytes, at: at)
+                        } catch {
+                            AppLog.sampler.error(
+                                "interface usage insert failed: \(String(describing: error), privacy: .public)"
+                            )
                         }
-                    } catch {
-                        AppLog.sampler.error(
-                            "interface usage insert failed: \(String(describing: error), privacy: .public)"
-                        )
                     }
                 }
             }

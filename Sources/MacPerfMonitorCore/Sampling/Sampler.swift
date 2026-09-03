@@ -246,11 +246,13 @@ public final class Sampler {
         reader?.start()
     }
 
-    /// The network reader's latest per-interface rates (bytes/sec), for the
-    /// per-interface usage history. Empty until the second read. Confined to
-    /// the sampler's serial queue like everything else here.
-    public func perInterfaceRates() -> [String: (inBytesPerSec: Double, outBytesPerSec: Double)] {
-        networkReader.perInterfaceRates
+    /// Take the per-interface bytes accumulated since the last call, for the
+    /// per-interface usage history. Unlike the rest of this type this is safe
+    /// from any queue (the reader guards the accumulator with its own lock),
+    /// because the history persist runs on the scan queue while the reads that
+    /// feed it happen on the sampler queue.
+    public func drainInterfaceBytes() -> [String: (inBytes: UInt64, outBytes: UInt64)] {
+        networkReader.drainInterfaceBytes()
     }
 
     /// Capture one full tick: the cheap system/CPU sample plus the heavy

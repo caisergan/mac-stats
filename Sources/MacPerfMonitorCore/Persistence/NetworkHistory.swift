@@ -465,17 +465,23 @@ public struct ConnectionUsage: Sendable, Identifiable, Equatable {
 }
 
 extension SampleStore {
-    /// Accrue one interval of per-interface rates into the current minute
-    /// bucket. Called on the persist cadence; the deltas add up, so a bucket
-    /// holds the interface's transferred bytes regardless of cadence.
+    /// Accrue observed per-interface bytes into the current minute bucket.
+    /// Called on the persist cadence with whatever the reader accumulated since
+    /// the last call, so a bucket holds the interface's transferred bytes
+    /// regardless of cadence and the breakdown adds up to the machine total.
+    /// Bytes are dated to the drain instant, so a drain that straddles a minute
+    /// boundary smears at most one persist interval (~2 s) into the newer
+    /// bucket.
     public func recordInterfaceUsage(
-        _ rates: [String: (inBytesPerSec: Double, outBytesPerSec: Double)],
-        dt: TimeInterval, at now: Date = Date()
+        _ bytes: [String: (inBytes: UInt64, outBytes: UInt64)], at now: Date = Date()
     ) throws {
-        guard dt > 0, !rates.isEmpty else { return }
+        guard !bytes.isEmpty else { return }
         let bucket = (now.timeIntervalSince1970 / 60).rounded(.down) * 60
         try databasePool.write { db in
-            for (name, rate) in rates {
+            for (name, transferred) in bytes
+            where transferred.inBytes > 0
+                || transferred.outBytes > 0
+            {
                 try db.execute(
                     sql: """
                         INSERT INTO interface_minute (interface, bucket, net_in_sum, net_out_sum)
@@ -485,7 +491,7 @@ extension SampleStore {
                             net_out_sum = net_out_sum + excluded.net_out_sum
                         """,
                     arguments: [
-                        name, bucket, rate.inBytesPerSec * dt, rate.outBytesPerSec * dt,
+                        name, bucket, Double(transferred.inBytes), Double(transferred.outBytes),
                     ])
             }
         }

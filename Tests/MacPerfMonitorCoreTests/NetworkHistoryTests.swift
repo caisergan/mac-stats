@@ -249,9 +249,9 @@ final class NetworkHistoryTests: XCTestCase {
 
     func testInterfaceUsageAccruesAndRollsUp() throws {
         try store.insert(systemSample: systemTick(0))
-        // Two 30 s intervals of the same rates land in one minute bucket.
-        try store.recordInterfaceUsage(["en0": (10, 5)], dt: 30, at: anchor)
-        try store.recordInterfaceUsage(["en0": (10, 5)], dt: 30, at: anchor.addingTimeInterval(30))
+        // Two drains of observed bytes land in the same minute bucket.
+        try store.recordInterfaceUsage(["en0": (300, 150)], at: anchor)
+        try store.recordInterfaceUsage(["en0": (300, 150)], at: anchor.addingTimeInterval(30))
 
         let minuteTotals = try store.interfaceUsage(.lastHour, now: anchor.addingTimeInterval(60))
         XCTAssertEqual(minuteTotals.count, 1)

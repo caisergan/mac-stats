@@ -41,7 +41,7 @@ public final class NetworkReader {
         var deltaIn: UInt64 = 0
         var deltaOut: UInt64 = 0
         var busiest: (name: String, bytes: UInt64)?
-        var perInterface: [String: (inBytesPerSec: Double, outBytesPerSec: Double)] = [:]
+        var perInterface: [String: (inBytes: UInt64, outBytes: UInt64)] = [:]
 
         for (name, current) in counters {
             guard let previous = lastCounters[name] else { continue }
@@ -54,16 +54,14 @@ public final class NetworkReader {
             deltaOut &+= outD
             let total = inD &+ outD
             if total > (busiest?.bytes ?? 0) { busiest = (name, total) }
-            if dt > 0 {
-                perInterface[name] = (Double(inD) / dt, Double(outD) / dt)
-            }
+            if inD > 0 || outD > 0 { perInterface[name] = (inD, outD) }
         }
 
         lastCounters = counters
         lastTime = now
         sessionIn &+= deltaIn
         sessionOut &+= deltaOut
-        perInterfaceRates = perInterface
+        accumulateInterfaceBytes(perInterface)
         let inRate = dt > 0 ? Double(deltaIn) / dt : 0
         let outRate = dt > 0 ? Double(deltaOut) / dt : 0
 
@@ -88,14 +86,50 @@ public final class NetworkReader {
     public func reset() {
         lastCounters.removeAll()
         lastTime = nil
-        perInterfaceRates = [:]
     }
 
-    /// The previous read's per-interface rates (bytes/sec, physical `en*`
-    /// interfaces only), for the per-interface usage history. Empty on the
-    /// first read and after `reset()`.
-    public private(set) var perInterfaceRates:
-        [String: (inBytesPerSec: Double, outBytesPerSec: Double)] = [:]
+    // MARK: - Per-interface usage accumulator
+
+    /// Exact per-interface bytes observed since the last drain (physical `en*`
+    /// only), for the per-interface usage history.
+    ///
+    /// An accumulator, not a rate: the history persist runs on a slower cadence
+    /// than this read, and multiplying one read's instantaneous rate by the
+    /// whole persist interval is a sample-and-hold estimate whose error is
+    /// unbounded (a burst that happened to land on the sampled read is smeared
+    /// across every second of the interval, and one that landed between reads
+    /// vanishes). These are the same wrap-corrected deltas the machine-wide
+    /// figure sums, so draining them makes the per-interface breakdown add up
+    /// to the machine total by construction.
+    ///
+    /// Lock-guarded because the drain happens on the persist queue while the
+    /// read happens on the sampler queue.
+    private let interfaceLock = NSLock()
+    private var pendingInterfaceBytes: [String: (inBytes: UInt64, outBytes: UInt64)] = [:]
+
+    private func accumulateInterfaceBytes(_ bytes: [String: (inBytes: UInt64, outBytes: UInt64)]) {
+        guard !bytes.isEmpty else { return }
+        interfaceLock.lock()
+        defer { interfaceLock.unlock() }
+        for (name, delta) in bytes {
+            let existing = pendingInterfaceBytes[name] ?? (0, 0)
+            pendingInterfaceBytes[name] = (
+                existing.inBytes &+ delta.inBytes, existing.outBytes &+ delta.outBytes
+            )
+        }
+    }
+
+    /// Take and clear the accumulated per-interface bytes. Safe from any queue.
+    /// `reset()` deliberately leaves these alone: they are traffic that really
+    /// crossed the wire and has not been persisted yet.
+    public func drainInterfaceBytes() -> [String: (inBytes: UInt64, outBytes: UInt64)] {
+        interfaceLock.lock()
+        defer { interfaceLock.unlock() }
+        let bytes = pendingInterfaceBytes
+        pendingInterfaceBytes.removeAll(keepingCapacity: true)
+        return bytes
+    }
+
     private struct InterfaceSnapshot {
         var counters: [String: (inBytes: UInt32, outBytes: UInt32)]
         var ipv4: [String: String]
