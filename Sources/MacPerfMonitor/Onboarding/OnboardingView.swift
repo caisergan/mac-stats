@@ -598,12 +598,14 @@ private struct OnboardingMenuBarStep: View {
     private func metricSubtitle(_ metric: MenuBarMetric) -> LocalizedStringKey {
         switch metric {
         case .pressure: return "Memory pressure and the largest processes."
+        case .ram: return "How much of your RAM is in use, and what is holding it."
         case .cpu: return "Total CPU, every core, and top CPU processes."
         case .gpu: return "GPU activity, power, memory, and temperature."
         case .energy: return "Charge, power flow, and top energy users."
         case .temperature: return "CPU and GPU die temperature, fan speed, and throttling."
         case .network: return "Download, upload, latency, and top network apps."
         case .disk: return "Physical read and write activity, devices, and top processes."
+        case .sensors: return "Every sensor the machine reports: fans, temperatures, and power."
         }
     }
 }

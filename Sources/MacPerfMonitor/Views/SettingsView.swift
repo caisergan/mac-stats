@@ -131,6 +131,7 @@ private struct GeneralSettingsView: View {
 
 /// Configures the single combined menu bar item and the optional Dock icon.
 private struct MenuBarDockSettingsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var model: SamplerModel
     @EnvironmentObject private var menuBar: CombinedMenuBarConfiguration
     /// Shared with `DockIconController`, so toggling shows or hides the Dock icon
@@ -146,11 +147,7 @@ private struct MenuBarDockSettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                caption(
-                    menuBar.presentation == .focus
-                        ? "Focus shows one chosen read-out in the smallest practical space."
-                        : "Strip shows every selected read-out together in one compact item."
-                )
+                caption(presentationCaption)
 
                 if menuBar.presentation == .focus {
                     Picker("Focused read-out", selection: focusBinding) {
@@ -163,27 +160,45 @@ private struct MenuBarDockSettingsView: View {
                 HStack {
                     Text("Preview")
                     Spacer()
-                    Image(nsImage: previewImage)
+                    if menuBar.presentation == .separate {
+                        // Each read-out gets its own chip, because each one is its
+                        // own menu bar item rather than a slice of a shared image.
+                        HStack(spacing: 6) {
+                            ForEach(separatePreviewImages, id: \.metric) { entry in
+                                Image(nsImage: entry.image)
+                                    .padding(.horizontal, 6)
+                                    .frame(height: 26)
+                                    .background(
+                                        Color.primary.opacity(0.06),
+                                        in: RoundedRectangle(cornerRadius: 5))
+                            }
+                        }
                         .accessibilityLabel("Menu bar preview")
-                        .padding(.horizontal, 9)
-                        .frame(height: 26)
-                        .background(
-                            Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+                    } else {
+                        Image(nsImage: previewImage)
+                            .accessibilityLabel("Menu bar preview")
+                            .padding(.horizontal, 9)
+                            .frame(height: 26)
+                            .background(
+                                Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+                    }
                 }
+                Toggle("Show alarm marker", isOn: $menuBar.showsAlarmMarker)
+                caption(
+                    "Put a red warning marker beside the read-outs while an alarm is active. Turning it off silences the marker only: the alarm still shows in the panel and still sends its notification."
+                )
             } header: {
                 Text("Combined Item")
             } footer: {
-                Text(
-                    "Read-outs follow the menu bar appearance. Active alarms add a red warning marker."
-                )
+                Text("Read-outs follow the menu bar appearance.")
             }
 
             Section {
-                ForEach(menuBar.selectedMetrics) { metric in
-                    metricRow(metric, isSelected: true)
-                }
-                ForEach(unselectedMetrics) { metric in
-                    metricRow(metric, isSelected: false)
+                // One list, in the user's own order. Splitting it into selected
+                // and unselected made a row jump the moment it was switched, so
+                // the thing you just clicked moved out from under the pointer.
+                ForEach(menuBar.metricOrder) { metric in
+                    metricRow(metric, isSelected: menuBar.isSelected(metric))
                 }
             } header: {
                 Text("Read-outs")
@@ -204,8 +219,33 @@ private struct MenuBarDockSettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var unselectedMetrics: [MenuBarMetric] {
-        MenuBarMetric.allCases.filter { !menuBar.isSelected($0) }
+    private var presentationCaption: LocalizedStringKey {
+        switch menuBar.presentation {
+        case .focus:
+            return "Focus shows one chosen read-out in the smallest practical space."
+        case .strip:
+            return "Strip shows every selected read-out together in one compact item."
+        case .separate:
+            return
+                "Separate gives every read-out its own menu bar item, so you can drag them into any order (hold Command and drag). macOS remembers where you put them."
+        }
+    }
+
+    /// One image per read-out, mirroring what `separate` mode puts on the bar.
+    private var separatePreviewImages: [(metric: MenuBarMetric, image: NSImage)] {
+        let styles = menuBar.widgetStyles
+        return CombinedMenuBarReadouts.current(
+            for: menuBar.selectedMetrics, styles: styles, model: model,
+            colors: menuBar.colorStates
+        ).map { readout in
+            (
+                metric: readout.metric,
+                image: CombinedMenuBarImage.image(
+                    readout: readout,
+                    style: CombinedMenuBarImage.style(for: readout.metric, in: styles),
+                    isDark: colorScheme == .dark)
+            )
+        }
     }
 
     private var presentationBinding: Binding<MenuBarPresentation> {
@@ -222,32 +262,90 @@ private struct MenuBarDockSettingsView: View {
             set: { menuBar.setSelected(metric, isSelected: $0) })
     }
 
+    private func colorBinding(_ metric: MenuBarMetric) -> Binding<Bool> {
+        Binding(
+            get: { menuBar.isColored(metric) },
+            set: { menuBar.setColored($0, for: metric) })
+    }
+
+    private func styleBinding(_ metric: MenuBarMetric) -> Binding<MenuBarWidgetStyle> {
+        Binding(
+            get: { menuBar.style(for: metric) },
+            set: { menuBar.setStyle($0, for: metric) })
+    }
+
     private func metricRow(_ metric: MenuBarMetric, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
             Toggle(isOn: selectionBinding(metric)) {
+                // One line always: the row's trailing controls decide how much
+                // width is left, and a wrapped title ("Sens / ors") drags the
+                // switch out of line with every other row.
                 Label(metric.title, systemImage: metric.symbolName)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .disabled(isSelected && menuBar.selectedMetrics.count == 1)
+            // Sensors is the one read-out whose content is chosen elsewhere, so
+            // it says where. In the tooltip rather than the row: an inline hint
+            // cost this row its alignment with the others.
+            .help(
+                metric == .sensors
+                    ? t(
+                        "Choose which sensors appear from the check beside each row in the Sensors panel."
+                    )
+                    : metric.title)
 
-            if isSelected, let index = menuBar.selectedMetrics.firstIndex(of: metric) {
-                Button {
-                    menuBar.move(metric, by: -1)
-                } label: {
-                    Image(systemName: "chevron.up")
+            // The shape and colour controls are laid out on every row and
+            // merely faded on the rows they do not apply to, so that switching
+            // a read-out on changes what the row offers without changing where
+            // anything in it sits.
+            Group {
+                Picker("", selection: styleBinding(metric)) {
+                    ForEach(MenuBarWidgetStyle.supported(for: metric)) { style in
+                        Text(style.title).tag(style)
+                    }
                 }
-                .buttonStyle(.borderless)
-                .disabled(index == 0)
-                .help("Move \(metric.title) earlier")
+                .labelsHidden()
+                .frame(width: 130)
+                .accessibilityLabel(t("%@ widget style", metric.title))
 
-                Button {
-                    menuBar.move(metric, by: 1)
-                } label: {
-                    Image(systemName: "chevron.down")
+                Toggle(isOn: colorBinding(metric)) {
+                    Image(systemName: "paintpalette")
                 }
-                .buttonStyle(.borderless)
-                .disabled(index == menuBar.selectedMetrics.count - 1)
-                .help("Move \(metric.title) later")
+                .toggleStyle(.button)
+                .help(
+                    menuBar.isColored(metric)
+                        ? t(
+                            "%@ is coloured. Click to draw it in the menu bar's own colour.",
+                            metric.title)
+                        : t("Colour %@ by its level.", metric.title)
+                )
+                .accessibilityLabel(t("Colour %@", metric.title))
             }
+            .opacity(isSelected ? 1 : 0)
+            .disabled(!isSelected)
+            .accessibilityHidden(!isSelected)
+
+            // Reordering stays available whether or not the read-out is
+            // switched on: its place in this list is where it will appear when
+            // it is switched on, so it is worth being able to set beforehand.
+            Button {
+                menuBar.move(metric, by: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!menuBar.canMove(metric, by: -1))
+            .help("Move \(metric.title) earlier")
+
+            Button {
+                menuBar.move(metric, by: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!menuBar.canMove(metric, by: 1))
+            .help("Move \(metric.title) later")
         }
     }
 
@@ -255,9 +353,12 @@ private struct MenuBarDockSettingsView: View {
         let metrics =
             menuBar.presentation == .focus
             ? [menuBar.focusedMetric] : menuBar.selectedMetrics
-        let readouts = CombinedMenuBarReadouts.current(for: metrics, model: model)
+        let styles = menuBar.widgetStyles
+        let readouts = CombinedMenuBarReadouts.current(
+            for: metrics, styles: styles, model: model, colors: menuBar.colorStates)
         return CombinedMenuBarImage.image(
-            readouts: readouts, presentation: menuBar.presentation)
+            readouts: readouts, styles: styles, presentation: menuBar.presentation,
+            isDark: colorScheme == .dark)
     }
 }
 

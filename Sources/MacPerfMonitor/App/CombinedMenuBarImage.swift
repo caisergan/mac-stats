@@ -1,125 +1,386 @@
 import AppKit
 import MacPerfMonitorCore
 
-struct CombinedMenuBarReadout {
-    var metric: MenuBarMetric
-    var value: String
-    var secondaryValue: String?
-    var isAlarm: Bool
-}
-
-extension MenuBarMetric {
-    func isAlarm(in activeKinds: Set<Alert.Kind>) -> Bool {
-        switch self {
-        case .pressure:
-            return !activeKinds.isDisjoint(with: [
-                .criticalPressure, .swap, .processCeiling, .leak,
-            ])
-        case .cpu:
-            return activeKinds.contains(.highCPU)
-        case .temperature:
-            return activeKinds.contains(.thermalThrottle)
-        case .gpu, .energy, .network, .disk:
-            return false
-        }
-    }
-}
-
 @MainActor
 enum CombinedMenuBarReadouts {
+    /// `colors` is the per-read-out colour switch; a metric with no entry is
+    /// coloured. `isDark` is the menu bar's own appearance, which the read-out
+    /// needs for the colours it resolves for itself.
     static func current(
-        for metrics: [MenuBarMetric], model: SamplerModel
+        for metrics: [MenuBarMetric], styles: [MenuBarMetric: MenuBarWidgetStyle],
+        model: SamplerModel, colors: [MenuBarMetric: Bool] = [:], isDark: Bool = true
     ) -> [CombinedMenuBarReadout] {
         metrics.map { metric in
-            let values = values(for: metric, model: model)
-            return CombinedMenuBarReadout(
-                metric: metric, value: values.0, secondaryValue: values.1,
-                isAlarm: metric.isAlarm(in: model.activeAlertKinds))
+            buildReadout(
+                for: metric, style: styles[metric] ?? .default(for: metric), model: model,
+                isColored: colors[metric] ?? true, isDark: isDark)
         }
     }
 
-    private static func values(
+    private static func buildReadout(
+        for metric: MenuBarMetric, style: MenuBarWidgetStyle, model: SamplerModel,
+        isColored: Bool, isDark: Bool
+    ) -> CombinedMenuBarReadout {
+        var readout = baseReadout(for: metric, model: model)
+        readout.isColored = isColored
+        readout.isDarkMenuBar = isDark
+        readout.valueTemplate = metric.menuBarValueTemplate
+        enrich(&readout, style: style, model: model)
+        return readout
+    }
+
+    private static func baseReadout(
         for metric: MenuBarMetric, model: SamplerModel
-    ) -> (String, String?) {
+    ) -> CombinedMenuBarReadout {
+        let isAlarm = metric.isAlarm(in: model.activeAlertKinds)
         switch metric {
         case .pressure:
-            let value = model.liveSystem.map { "\(Int($0.pressurePercent.rounded()))%" } ?? "--"
-            return (value, nil)
+            let system = model.liveSystem
+            let pct = system.map { Int($0.pressurePercent.rounded()) }
+            let val = pct.map { "\($0)%" } ?? "--%"
+            return CombinedMenuBarReadout(
+                metric: metric, value: val, secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "PRS",
+                fraction: (system?.pressurePercent ?? 0) / 100,
+                pressureLevel: system?.pressureLevel ?? .normal)
+
+        case .ram:
+            let usage = memoryUsage(model: model)
+            let val = usage.map { "\(Int(($0.fraction * 100).rounded()))%" } ?? "--%"
+            return CombinedMenuBarReadout(
+                metric: metric, value: val, secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "RAM",
+                fraction: usage?.fraction ?? 0,
+                pressureLevel: model.liveSystem?.pressureLevel ?? .normal)
+
         case .cpu:
-            let value = model.smoothedCPU.map { "\(Int(($0.totalUsage * 100).rounded()))%" } ?? "--"
-            return (value, nil)
+            let usage = model.smoothedCPU.map(\.totalUsage)
+            let pct = usage.map { Int(($0 * 100).rounded()) }
+            let val = pct.map { "\($0)%" } ?? "--%"
+            return CombinedMenuBarReadout(
+                metric: metric, value: val, secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "CPU",
+                fraction: usage ?? 0)
+
         case .gpu:
-            let value = model.smoothedGPUUtilization.map { "\(Int($0.rounded()))%" } ?? "--"
-            return (value, nil)
-        case .energy:
-            guard let battery = model.latestBattery else { return ("--", nil) }
-            if battery.isPresent {
-                return ("\(Int(battery.chargePercent.rounded()))%", nil)
-            }
-            let watts = battery.systemPowerWatts
-            return (watts > 0 ? "\(Int(watts.rounded()))W" : "--", nil)
+            let usage = model.smoothedGPUUtilization
+            let pct = usage.map { Int($0.rounded()) }
+            let val = pct.map { "\($0)%" } ?? "--%"
+            return CombinedMenuBarReadout(
+                metric: metric, value: val, secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "GPU",
+                fraction: (usage ?? 0) / 100)
+
         case .temperature:
-            // The hottest CPU die sensor; bare degree sign to keep the strip
-            // narrow (the panel spells out the domains and units).
-            let value = (model.liveSystem?.cpuDieC).map { "\(Int($0.rounded()))°" } ?? "--"
-            return (value, nil)
+            let temp = model.liveSystem?.cpuDieC
+            let val = temp.map { "\(Int($0.rounded()))°" } ?? "--°"
+            return CombinedMenuBarReadout(
+                metric: metric, value: val, secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "TMP",
+                // 100 °C is the top of the die's own scale, so the gauges read as
+                // a share of "as hot as this part ever gets".
+                fraction: min(max((temp ?? 0) / 100, 0), 1))
+
+        case .energy:
+            if let battery = model.latestBattery, battery.isPresent {
+                let charge = battery.chargePercent / 100.0
+                let isCharging = battery.isCharging || battery.isOnAC
+                let percentStr = "\(Int(battery.chargePercent.rounded()))%"
+                return CombinedMenuBarReadout(
+                    metric: metric, value: percentStr, secondaryValue: nil,
+                    isAlarm: isAlarm, batteryCharge: charge, isBatteryCharging: battery.isCharging,
+                    isBatteryPresent: true, isOnAC: isCharging,
+                    isLowPowerMode: battery.isLowPowerMode,
+                    batteryTimeText: batteryTimeText(battery), customLabel: "BAT",
+                    fraction: charge)
+            } else {
+                let watts = model.latestBattery?.systemPowerWatts ?? 0
+                let val = watts > 0 ? "\(Int(watts.rounded()))W" : "--"
+                return CombinedMenuBarReadout(
+                    metric: metric, value: val, secondaryValue: nil,
+                    isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                    isBatteryPresent: false, customLabel: "Sensor")
+            }
+
         case .network:
-            guard let rates = model.smoothedNetworkRates else { return ("--↓", "--↑") }
-            return (
-                "\(ByteFormat.rateCompact(rates.inBytesPerSec))↓",
-                "\(ByteFormat.rateCompact(rates.outBytesPerSec))↑"
-            )
+            let rates = model.smoothedNetworkRates
+            let down = rates?.inBytesPerSec ?? 0
+            let up = rates?.outBytesPerSec ?? 0
+            return CombinedMenuBarReadout(
+                metric: metric, value: formatSpeed(down), secondaryValue: formatSpeed(up),
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "NET",
+                primaryBytesPerSec: down, secondaryBytesPerSec: up)
+
         case .disk:
-            guard let rates = model.smoothedDiskRates else { return ("--↓", "--↑") }
-            return (
-                "\(ByteFormat.rateCompact(rates.readBytesPerSec))↓",
-                "\(ByteFormat.rateCompact(rates.writeBytesPerSec))↑"
-            )
+            let rates = model.smoothedDiskRates
+            let read = rates?.readBytesPerSec ?? 0
+            let write = rates?.writeBytesPerSec ?? 0
+            return CombinedMenuBarReadout(
+                metric: metric, value: formatSpeed(read), secondaryValue: formatSpeed(write),
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "DSK",
+                primaryBytesPerSec: read, secondaryBytesPerSec: write)
+
+        case .sensors:
+            // The figures come from the sensors store, not the sampler: the SMC
+            // sweep is its own reader on its own queue (see `SensorsStore`).
+            let chosen = SensorsStore.shared.menuBarReadings
+            // With nothing chosen the cell still has to be visible and
+            // clickable, or there is no way back to the panel that chooses.
+            let rows = chosen.isEmpty ? [metric.shortTitle] : chosen.map(\.menuBarValue)
+            var readout = CombinedMenuBarReadout(
+                metric: metric, value: chosen.first?.menuBarValue ?? "--",
+                secondaryValue: nil,
+                isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,
+                isBatteryPresent: false, customLabel: "SNS",
+                stackRows: rows)
+            readout.stackTemplates =
+                chosen.isEmpty ? rows.map { [$0] } : chosen.map(\.menuBarTemplates)
+            return readout
+        }
+    }
+
+    /// Fill in only the extra data the chosen shape actually draws: history for
+    /// the charts, bars for the bar chart, split figures for memory, and the row
+    /// strings for the stack and text shapes.
+    private static func enrich(
+        _ readout: inout CombinedMenuBarReadout, style: MenuBarWidgetStyle, model: SamplerModel
+    ) {
+        switch style {
+        case .lineChart:
+            readout.trail = trail(for: readout.metric, model: model)
+
+        case .networkChart:
+            readout.trail = trail(for: readout.metric, model: model)
+            readout.secondaryTrail = secondaryTrail(for: readout.metric, model: model)
+
+        case .barChart:
+            readout.bars = bars(for: readout, model: model)
+
+        case .pieChart, .tachometer:
+            if readout.metric == .cpu { readout.bars = bars(for: readout, model: model) }
+            normalizeThroughput(&readout, model: model)
+
+        case .state:
+            normalizeThroughput(&readout, model: model)
+
+        case .memory:
+            readout.memoryRows = memoryRows(model: model)
+
+        case .stack:
+            // Sensors filled its own rows in `baseReadout`: one per chosen
+            // sensor, which is the whole point of the read-out.
+            if readout.metric != .sensors {
+                readout.stackRows = [readout.value, readout.secondaryValue].compactMap { $0 }
+            }
+
+        case .text:
+            readout.textValue = [readout.value, readout.secondaryValue]
+                .compactMap { $0 }.joined(separator: " / ")
+
+        case .mini, .speed, .battery, .batteryDetails, .label:
+            break
+        }
+    }
+
+    /// The two-direction metrics have no natural 0...1 level, so the gauges scale
+    /// the combined rate against the busiest moment in recent history and split
+    /// the arc by direction.
+    private static func normalizeThroughput(
+        _ readout: inout CombinedMenuBarReadout, model: SamplerModel
+    ) {
+        guard readout.metric.hasSecondaryValue else { return }
+        let combined = readout.primaryBytesPerSec + readout.secondaryBytesPerSec
+        let peak = max(trail(for: readout.metric, model: model).max() ?? 0, 1)
+        readout.fraction = min(combined / peak, 1)
+        readout.inShare = combined > 0 ? readout.primaryBytesPerSec / combined : 0.5
+    }
+
+    /// The inbound history (download, read) or the single-figure history.
+    private static func trail(for metric: MenuBarMetric, model: SamplerModel) -> [Double] {
+        let history = model.systemHistory.elements()
+            .suffix(StatsMenuBarWidgets.historyPoints)
+        switch metric {
+        case .pressure: return history.map { $0.pressurePercent / 100 }
+        case .ram:
+            return history.map { sample in
+                guard sample.totalRAM > 0 else { return 0 }
+                let used = min(
+                    sample.appMemory &+ sample.wired &+ sample.compressed, sample.totalRAM)
+                return Double(used) / Double(sample.totalRAM)
+            }
+        case .cpu: return history.map(\.cpuLoad)
+        case .gpu: return history.map { ($0.gpuUtilization ?? 0) / 100 }
+        case .temperature: return history.map { $0.cpuDieC ?? 0 }
+        case .energy: return history.map { $0.batteryCharge / 100 }
+        case .network: return history.map(\.networkInBytesPerSec)
+        case .disk: return history.map(\.diskReadBytesPerSec)
+        // No single series: a sensors read-out is a set of unrelated figures.
+        case .sensors: return []
+        }
+    }
+
+    /// The outbound history (upload, write); empty for the single-figure metrics.
+    private static func secondaryTrail(for metric: MenuBarMetric, model: SamplerModel) -> [Double] {
+        let history = model.systemHistory.elements()
+            .suffix(StatsMenuBarWidgets.historyPoints)
+        switch metric {
+        case .network: return history.map(\.networkOutBytesPerSec)
+        case .disk: return history.map(\.diskWriteBytesPerSec)
+        case .pressure, .ram, .cpu, .gpu, .temperature, .energy, .sensors: return []
+        }
+    }
+
+    /// The bar chart's bars. CPU gets one bar per logical core, the way Stats
+    /// draws it; every other metric gets the single bar its one figure supports.
+    private static func bars(
+        for readout: CombinedMenuBarReadout, model: SamplerModel
+    ) -> [[MenuBarWidgetSegment]] {
+        if readout.metric == .cpu, let sample = model.smoothedCPU, !sample.cores.isEmpty {
+            return sample.cores.map { core in
+                [
+                    MenuBarWidgetSegment(
+                        min(max(core.usage, 0), 1),
+                        color: StatsMenuBarWidgets.usageColor(core.usage))
+                ]
+            }
+        }
+        return [readout.gaugeSegments(isDark: true)]
+    }
+
+    /// RAM in use, as the memory panel and Activity Monitor define it: app memory
+    /// plus wired plus compressed, over the installed total. Cached files are
+    /// deliberately NOT counted as used (they are reclaimable), which is what
+    /// keeps this figure equal to the one the panel prints under its chart.
+    ///
+    /// Note this is a different measurement from `pressurePercent`, which is the
+    /// 0...100 pressure index: a Mac can sit at 84% used and still report a calm
+    /// pressure index, and the two readouts are separate for exactly that reason.
+    static func memoryUsage(
+        model: SamplerModel
+    ) -> (used: UInt64, free: UInt64, fraction: Double)? {
+        guard let system = model.liveSystem, system.totalRAM > 0 else { return nil }
+        let used = min(
+            system.appMemory &+ system.wired &+ system.compressed, system.totalRAM)
+        return (
+            used: used, free: system.totalRAM - used,
+            fraction: Double(used) / Double(system.totalRAM)
+        )
+    }
+
+    private static func memoryRows(model: SamplerModel) -> (free: String, used: String) {
+        guard let usage = memoryUsage(model: model) else { return (free: "--", used: "--") }
+        return (free: ByteFormat.string(usage.free), used: ByteFormat.string(usage.used))
+    }
+
+    /// Stats' short time format, `h:mm`, from whichever estimate applies.
+    private static func batteryTimeText(_ battery: BatterySample) -> String? {
+        guard
+            let minutes = battery.isCharging
+                ? battery.timeToFullMinutes : battery.timeToEmptyMinutes,
+            minutes > 0
+        else { return nil }
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        return "\(hours):\(remainder > 9 ? "\(remainder)" : "0\(remainder)")"
+    }
+
+    static func formatSpeed(_ bytesPerSec: Double) -> String {
+        let b = max(0, bytesPerSec)
+        if b < 1_000 {
+            return "0 KB/s"
+        } else if b < 1_000_000 {
+            let kb = Int((b / 1_000).rounded())
+            return "\(kb) KB/s"
+        } else if b < 100_000_000 {
+            let mb = b / 1_000_000
+            return String(format: "%.1f MB/s", locale: .current, mb)
+        } else if b < 1_000_000_000 {
+            let mb = Int((b / 1_000_000).rounded())
+            return "\(mb) MB/s"
+        } else {
+            let gb = b / 1_000_000_000
+            return String(format: "%.1f GB/s", locale: .current, gb)
         }
     }
 }
 
 @MainActor
 enum CombinedMenuBarImage {
-    private static let stripSeparatorWidth: CGFloat = 1.5
-    /// Shared menu-bar item height so Focus and Strip cells align.
-    private static let itemHeight: CGFloat = 22
-    /// Matched figure size for every two-line cell (caption+value and ↓/↑).
-    private static let stackedFigureSize: CGFloat = 9.5
+    /// Uniform spacing between adjacent widget cells.
+    /// The gap between read-outs in a strip.
+    ///
+    /// This, not the cells, is most of the space between "25%" and the "RAM"
+    /// beside it: a cell is now sized to the figure it reserves, so what looked
+    /// like padding inside the CPU read-out was the separator after it. Cells
+    /// carry no margin of their own any more, so the separator is the whole
+    /// gap and can be smaller than it was when they did.
+    private static let cellSpacing: CGFloat = 5
+    /// Shared menu bar item height so Focus and Strip cells align.
+    private static let itemHeight: CGFloat = StatsMenuBarWidgets.Metrics.itemHeight
+
+    /// One read-out on its own, for a `separate` mode status item (and for the
+    /// Settings preview of that mode).
+    static func image(
+        readout: CombinedMenuBarReadout, style: MenuBarWidgetStyle, isDark: Bool = true
+    ) -> NSImage {
+        let cell = StatsMenuBarWidgets.cell(for: readout, style: style, isDark: isDark)
+        let image = MenuBarReadoutImage.render(width: max(cell.width, 1), height: itemHeight) {
+            _ in
+            cell.draw(0)
+        }
+        image.isTemplate = false
+        return image
+    }
 
     static func image(
-        readouts: [CombinedMenuBarReadout], presentation: MenuBarPresentation
+        readouts: [CombinedMenuBarReadout],
+        styles: [MenuBarMetric: MenuBarWidgetStyle],
+        presentation: MenuBarPresentation,
+        isDark: Bool = true
     ) -> NSImage {
-        let image =
-            switch presentation {
-            case .focus:
-                focusImage(readout: readouts[0])
-            case .strip:
-                stripImage(readouts: readouts)
+        let cells = layouts(for: readouts, styles: styles, isDark: isDark)
+        let contentWidth =
+            cells.reduce(0) { $0 + $1.width }
+            + cellSpacing * CGFloat(max(0, cells.count - 1))
+
+        let image = MenuBarReadoutImage.render(width: max(contentWidth, 1), height: itemHeight) {
+            _ in
+            var x: CGFloat = 0
+            for (index, cell) in cells.enumerated() {
+                cell.draw(x)
+                x += cell.width
+                if index < cells.count - 1 { x += cellSpacing }
             }
-        // A status item is mirrored to every display. Template tinting lets each
-        // menu bar choose its own contrasting color instead of sharing pixels
-        // baked for whichever display was active on the last sample.
-        image.isTemplate = true
+        }
+        // Non-template so custom colored dots and battery gauges survive tinting.
+        image.isTemplate = false
         return image
     }
 
     static func metric(
         at imageX: CGFloat, readouts: [CombinedMenuBarReadout],
+        styles: [MenuBarMetric: MenuBarWidgetStyle],
         presentation: MenuBarPresentation
     ) -> MenuBarMetric? {
         guard let first = readouts.first else { return nil }
         guard presentation == .strip else { return first.metric }
 
-        let layouts = readouts.map { layout(for: $0) }
+        let cells = layouts(for: readouts, styles: styles, isDark: true)
         var x: CGFloat = 0
         for index in readouts.indices {
-            let end = x + layouts[index].width
+            let end = x + cells[index].width
             if imageX <= end { return readouts[index].metric }
             if index < readouts.count - 1 {
-                let separatorEnd = end + stripSeparatorWidth
+                let separatorEnd = end + cellSpacing
                 if imageX < separatorEnd {
-                    return imageX - end < stripSeparatorWidth / 2
+                    return imageX - end < cellSpacing / 2
                         ? readouts[index].metric : readouts[index + 1].metric
                 }
                 x = separatorEnd
@@ -129,207 +390,25 @@ enum CombinedMenuBarImage {
         return readouts.last?.metric
     }
 
-    private static func focusImage(readout: CombinedMenuBarReadout) -> NSImage {
-        let color = NSColor.black
-        let label = attributed(
-            readout.metric.shortTitle,
-            font: MenuBarReadoutImage.valueFont(size: 8, weight: .semibold), color: color)
-        let hasDirectionalValues = readout.secondaryValue != nil
-        let labelWidth: CGFloat = hasDirectionalValues ? 14 : ceil(label.size().width)
-        let gap: CGFloat = hasDirectionalValues ? 5 : 4
-
-        if let secondaryValue = readout.secondaryValue {
-            let figureFont = MenuBarReadoutImage.valueFont(
-                size: stackedFigureSize, weight: .bold)
-            let arrowFont = MenuBarReadoutImage.valueFont(
-                size: stackedFigureSize, weight: .medium)
-            let primary = directionalAttributed(
-                readout.value, figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let secondary = directionalAttributed(
-                secondaryValue, figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let sample = directionalAttributed(
-                "999M↓", figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let valuesWidth = ceil(
-                max(primary.size().width, secondary.size().width, sample.size().width))
-            let width = labelWidth + gap + valuesWidth + 1
-
-            return MenuBarReadoutImage.render(width: width, height: itemHeight) { size in
-                drawSymbol(
-                    readout.metric.symbolName,
-                    in: NSRect(x: 0, y: (size.height - 13) / 2, width: 13, height: 13),
-                    color: color, pointSize: 11)
-                drawStackedLines(
-                    top: primary, bottom: secondary,
-                    topX: labelWidth + gap + valuesWidth - primary.size().width,
-                    bottomX: labelWidth + gap + valuesWidth - secondary.size().width,
-                    height: size.height)
-            }
-        }
-
-        let valueFont = MenuBarReadoutImage.valueFont(size: 13 * 1.05, weight: .bold)
-        let primary = attributed(readout.value, font: valueFont, color: color)
-        let valuesWidth = ceil(primary.size().width)
-        let width = labelWidth + gap + valuesWidth + 1
-
-        return MenuBarReadoutImage.render(width: width, height: itemHeight) { size in
-            label.draw(at: NSPoint(x: 0, y: (size.height - label.size().height) / 2))
-            primary.draw(
-                at: NSPoint(
-                    x: labelWidth + gap,
-                    y: (size.height - primary.size().height) / 2))
+    private static func layouts(
+        for readouts: [CombinedMenuBarReadout], styles: [MenuBarMetric: MenuBarWidgetStyle],
+        isDark: Bool
+    ) -> [StatsMenuBarWidgets.Cell] {
+        readouts.map { readout in
+            StatsMenuBarWidgets.cell(
+                for: readout, style: style(for: readout.metric, in: styles), isDark: isDark)
         }
     }
 
-    private static func stripImage(readouts: [CombinedMenuBarReadout]) -> NSImage {
-        let layouts = readouts.map { layout(for: $0) }
-        let contentWidth =
-            layouts.reduce(0) { $0 + $1.width }
-            + stripSeparatorWidth * CGFloat(max(0, layouts.count - 1))
-        let width = contentWidth
-
-        return MenuBarReadoutImage.render(width: width, height: itemHeight) { size in
-            var x: CGFloat = 0
-            for (index, layout) in layouts.enumerated() {
-                layout.draw(at: x, height: size.height)
-                x += layout.width
-                if index < layouts.count - 1 { x += stripSeparatorWidth }
-            }
+    /// The shape chosen for `metric`, falling back to its default and refusing a
+    /// stored shape the metric cannot draw (a battery widget on the CPU, say,
+    /// from a preference written before a metric changed).
+    static func style(
+        for metric: MenuBarMetric, in styles: [MenuBarMetric: MenuBarWidgetStyle]
+    ) -> MenuBarWidgetStyle {
+        guard let style = styles[metric], style.supports(metric) else {
+            return .default(for: metric)
         }
+        return style
     }
-
-    private struct CellLayout {
-        var width: CGFloat
-        var draw: (_ x: CGFloat, _ height: CGFloat) -> Void
-
-        func draw(at x: CGFloat, height: CGFloat) { draw(x, height) }
-    }
-
-    private static func layout(for readout: CombinedMenuBarReadout) -> CellLayout {
-        let color = NSColor.black
-        if let secondary = readout.secondaryValue {
-            let labelWidth: CGFloat = 14
-            let figureFont = MenuBarReadoutImage.valueFont(
-                size: stackedFigureSize, weight: .bold)
-            let arrowFont = MenuBarReadoutImage.valueFont(
-                size: stackedFigureSize, weight: .medium)
-            let top = directionalAttributed(
-                readout.value, figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let bottom = directionalAttributed(
-                secondary, figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let sample = directionalAttributed(
-                "999M↓", figureFont: figureFont, arrowFont: arrowFont, color: color)
-            let figuresWidth = ceil(max(top.size().width, bottom.size().width, sample.size().width))
-            let gap: CGFloat = 5
-            let width = labelWidth + gap + figuresWidth + 1
-            return CellLayout(width: width) { x, height in
-                drawSymbol(
-                    readout.metric.symbolName,
-                    in: NSRect(x: x, y: (height - 13) / 2, width: 13, height: 13),
-                    color: color, pointSize: 11)
-                drawStackedLines(
-                    top: top, bottom: bottom,
-                    topX: x + labelWidth + gap + figuresWidth - top.size().width,
-                    bottomX: x + labelWidth + gap + figuresWidth - bottom.size().width,
-                    height: height)
-            }
-        }
-
-        let label = attributed(
-            readout.metric.shortTitle,
-            font: MenuBarReadoutImage.valueFont(size: 7, weight: .semibold), color: color)
-        // Larger value than the ↓/↑ figures, medium weight (not bold) so the
-        // strip matches Disk/Network visually; label pins to the top.
-        let font = MenuBarReadoutImage.valueFont(size: 12.5, weight: .medium)
-        let compactValue =
-            readout.value.hasSuffix("%") ? String(readout.value.dropLast()) : readout.value
-        let value = attributed(compactValue, font: font, color: color)
-        // Width-stability sample per unit family, so a cell never jitters as
-        // digits change: percent readouts size against "100", temperature
-        // against "100°", wattage against "199W".
-        let sampleText =
-            readout.value.hasSuffix("%")
-            ? "100"
-            : readout.value.hasSuffix("°") ? "100°" : "199W"
-        let sample = attributed(sampleText, font: font, color: color)
-        let width = ceil(max(value.size().width, sample.size().width, label.size().width)) + 1
-        return CellLayout(width: width) { x, height in
-            label.draw(
-                at: NSPoint(
-                    x: x + (width - label.size().width) / 2,
-                    y: height - label.size().height + 1))
-            value.draw(
-                at: NSPoint(
-                    x: x + (width - value.size().width) / 2,
-                    y: 0))
-        }
-    }
-
-    /// Two-line column with a shared midline: top row sits in the upper half,
-    /// bottom row in the lower half. Used by both caption+value and ↓/↑ cells
-    /// so Strip (and Focus dual) heights read as one band.
-    private static func drawStackedLines(
-        top: NSAttributedString, bottom: NSAttributedString,
-        topX: CGFloat, bottomX: CGFloat, height: CGFloat
-    ) {
-        let rowH = height / 2
-        top.draw(
-            at: NSPoint(
-                x: topX,
-                y: rowH + max(0, (rowH - top.size().height) / 2)))
-        bottom.draw(
-            at: NSPoint(
-                x: bottomX,
-                y: max(0, (rowH - bottom.size().height) / 2)))
-    }
-
-    private static func attributed(
-        _ text: String, font: NSFont, color: NSColor
-    )
-        -> NSAttributedString
-    {
-        NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-    }
-
-    private static func directionalAttributed(
-        _ text: String, figureFont: NSFont, arrowFont: NSFont, color: NSColor
-    ) -> NSAttributedString {
-        guard let arrow = text.last else {
-            return attributed(text, font: figureFont, color: color)
-        }
-        let result = NSMutableAttributedString(
-            attributedString: attributed(
-                String(text.dropLast()), font: figureFont, color: color))
-        result.append(
-            NSAttributedString(
-                string: String(arrow),
-                attributes: [.font: arrowFont, .foregroundColor: color]))
-        return result
-    }
-
-    /// Configured SF Symbols by name and size. Looking a symbol up and
-    /// applying its configuration was the single largest cost of rasterising
-    /// the strip (about 1% of main-thread time on its own at 4 Hz).
-    private static var symbolCache: [String: NSImage] = [:]
-
-    private static func drawSymbol(
-        _ name: String, in rect: NSRect, color: NSColor, pointSize: CGFloat
-    ) {
-        let key = "\(name)@\(pointSize)"
-        let symbol: NSImage
-        if let cached = symbolCache[key] {
-            symbol = cached
-        } else {
-            guard
-                let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
-                let configured = base.withSymbolConfiguration(
-                    .init(pointSize: pointSize, weight: .semibold))
-            else { return }
-            symbolCache[key] = configured
-            symbol = configured
-        }
-        symbol.draw(in: rect)
-        color.setFill()
-        rect.fill(using: .sourceAtop)
-    }
-
 }

@@ -955,6 +955,23 @@
         }
       }
     },
+    "%@ is coloured. Click to draw it in the menu bar's own colour.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is coloured. Click to draw it in the menu bar's own colour."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已着色。点按可改用菜单栏本身的颜色。"
+          }
+        }
+      }
+    },
     "%@ is in menu-bar-only mode and isn't recording history. Turn on logging to chart these ranges — it starts recording now, and history builds up from here.": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -969,6 +986,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ 当前是「仅菜单栏」模式，不记录历史。开启记录后才能绘制这些区间，记录从现在开始逐步积累。"
+          }
+        }
+      }
+    },
+    "%@ is in the menu bar. Click to remove it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is in the menu bar. Click to remove it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已显示在菜单栏中。点按可移除。"
           }
         }
       }
@@ -1851,6 +1885,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ 也会监控自身内存。仅菜单栏激活时,其占用应远低于 60 MB。"
+          }
+        }
+      }
+    },
+    "%@ widget style": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ widget style"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 小组件样式"
           }
         }
       }
@@ -4285,6 +4337,23 @@
         }
       }
     },
+    "All cores": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All cores"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有核心"
+          }
+        }
+      }
+    },
     "All good": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -5167,6 +5236,23 @@
         }
       }
     },
+    "Averages only": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Averages only"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅平均值"
+          }
+        }
+      }
+    },
     "Averaging ~{cpu.sustainedPercent}% CPU over the last hour — holding this much CPU for so long usually means a stuck task, a busy loop, or runaway background work, even though it stays below the instantaneous-spike level.": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -5347,6 +5433,24 @@
         }
       }
     },
+    "Bar chart": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bar chart"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "柱状图"
+          }
+        }
+      }
+    },
     "Battery": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -5415,6 +5519,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "电量（右）"
+          }
+        }
+      }
+    },
+    "Battery details": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery details"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电池详情"
           }
         }
       }
@@ -7309,6 +7431,23 @@
         }
       }
     },
+    "Choose which sensors appear from the check beside each row in the Sensors panel.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose which sensors appear from the check beside each row in the Sensors panel."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在“传感器”面板中点按各行旁的选项，即可选择要显示的传感器。"
+          }
+        }
+      }
+    },
     "Class": {
       "comment": "Memory Inspector & Open Files",
       "extractionState": "manual",
@@ -7431,6 +7570,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "点按菜单栏读数即可快速查看任一指标。"
+          }
+        }
+      }
+    },
+    "Click to show %@ in the menu bar.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click to show %@ in the menu bar."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "点按可在菜单栏中显示 %@。"
           }
         }
       }
@@ -7809,6 +7965,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "着色"
+          }
+        }
+      }
+    },
+    "Colour %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colour %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为 %@ 着色"
+          }
+        }
+      }
+    },
+    "Colour %@ by its level.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colour %@ by its level."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按级别为 %@ 着色。"
           }
         }
       }
@@ -8961,6 +9151,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "严重内存压力"
+          }
+        }
+      }
+    },
+    "Current": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电流"
           }
         }
       }
@@ -12025,6 +12232,23 @@
         }
       }
     },
+    "Every CPU and GPU core reports its own temperature, and they track each other closely. The averages stand in for them unless you ask for the detail.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every CPU and GPU core reports its own temperature, and they track each other closely. The averages stand in for them unless you ask for the detail."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 CPU 和 GPU 核心都会报告自己的温度，而它们彼此非常接近。除非你要求查看细节，否则将用平均值代表它们。"
+          }
+        }
+      }
+    },
     "Every P-core and E-core cluster sensor the SMC exposes is read on a short throttle, and the card shows the maximum. The trend behind it is the same two-hour window as the other header cards.": {
       "comment": "Metric Cards & Explanations",
       "extractionState": "manual",
@@ -12547,6 +12771,23 @@
         }
       }
     },
+    "Fan #%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fan #%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "风扇 #%@"
+          }
+        }
+      }
+    },
     "Fan %@": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -12687,6 +12928,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "风扇关闭"
+          }
+        }
+      }
+    },
+    "Fastest fan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fastest fan"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最快风扇"
           }
         }
       }
@@ -15355,6 +15613,23 @@
         }
       }
     },
+    "How hard the memory system is working, 0 to 100: compression, swap, and the trend. Not the share of RAM in use, which is below.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How hard the memory system is working, 0 to 100: compression, swap, and the trend. Not the share of RAM in use, which is below."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内存系统的工作强度，0 到 100：压缩、交换和趋势。这不是已用内存的比例，后者在下方显示。"
+          }
+        }
+      }
+    },
     "How it's calculated": {
       "comment": "Metric Cards & Explanations",
       "extractionState": "manual",
@@ -15441,6 +15716,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前所有核心上使用的 Mac 总 CPU 容量比例，从 0 到 100 百分比。100% 意味着每个逻辑核心都处于完全繁忙状态。"
+          }
+        }
+      }
+    },
+    "How much of your RAM is in use, and what is holding it.": {
+      "comment": "Onboarding subtitle for the RAM menu bar readout.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How much of your RAM is in use, and what is holding it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有多少内存正在使用中，以及是哪些进程占用的。"
           }
         }
       }
@@ -16975,6 +17268,24 @@
         }
       }
     },
+    "Label": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Label"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标签"
+          }
+        }
+      }
+    },
     "Language": {
       "comment": "SettingsView",
       "extractionState": "manual",
@@ -17299,6 +17610,23 @@
         }
       }
     },
+    "Left fan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left fan"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "左侧风扇"
+          }
+        }
+      }
+    },
     "Length": {
       "comment": "Disk Map (1.6.0)",
       "extractionState": "manual",
@@ -17475,6 +17803,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "权限受限"
+          }
+        }
+      }
+    },
+    "Line chart": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line chart"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "折线图"
           }
         }
       }
@@ -18703,6 +19049,24 @@
         }
       }
     },
+    "Memory Used": {
+      "comment": "Menu bar readout: the share of installed RAM in use, as distinct from the pressure index.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Memory Used"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已用内存"
+          }
+        }
+      }
+    },
     "Memory apps are actively using, not reclaimable cache. Click for details.": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -19495,6 +19859,24 @@
         }
       }
     },
+    "Mini": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mini"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷你"
+          }
+        }
+      }
+    },
     "Mirror": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -20139,6 +20521,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "网络扫描"
+          }
+        }
+      }
+    },
+    "Network chart": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network chart"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络图"
           }
         }
       }
@@ -24031,6 +24431,24 @@
         }
       }
     },
+    "Pie chart": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pie chart"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "饼图"
+          }
+        }
+      }
+    },
     "Ping": {
       "comment": "Network & Network Scan View",
       "extractionState": "manual",
@@ -25363,6 +25781,23 @@
         }
       }
     },
+    "Put a red warning marker beside the read-outs while an alarm is active. Turning it off silences the marker only: the alarm still shows in the panel and still sends its notification.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Put a red warning marker beside the read-outs while an alarm is active. Turning it off silences the marker only: the alarm still shows in the panel and still sends its notification."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警报处于激活状态时，在读数旁显示红色警告标记。关闭后仅隐藏该标记：警报仍会显示在面板中，并且仍会发送通知。"
+          }
+        }
+      }
+    },
     "Query texture LOD": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -25885,20 +26320,19 @@
         }
       }
     },
-    "Read-outs follow the menu bar appearance. Active alarms add a red warning marker.": {
-      "comment": "SettingsView",
+    "Read-outs follow the menu bar appearance.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Read-outs follow the menu bar appearance. Active alarms add a red warning marker."
+            "value": "Read-outs follow the menu bar appearance."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "读数跟随菜单栏外观。活动中的警报会添加红色警告标记。"
+            "value": "读数会跟随菜单栏外观。"
           }
         }
       }
@@ -26745,6 +27179,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "修订版本 ID"
+          }
+        }
+      }
+    },
+    "Right fan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right fan"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "右侧风扇"
           }
         }
       }
@@ -28045,6 +28496,42 @@
         }
       }
     },
+    "Separate": {
+      "comment": "Menu bar presentation mode: one status item per read-out.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Separate"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立"
+          }
+        }
+      }
+    },
+    "Separate gives every read-out its own menu bar item, so you can drag them into any order (hold Command and drag). macOS remembers where you put them.": {
+      "comment": "Caption for the Separate menu bar presentation mode.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Separate gives every read-out its own menu bar item, so you can drag them into any order (hold Command and drag). macOS remembers where you put them."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「独立」为每个读数分配单独的菜单栏项目，你可以按住 Command 键拖动来任意排序。macOS 会记住你放置的位置。"
+          }
+        }
+      }
+    },
     "Serial": {
       "comment": "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState": "manual",
@@ -28599,6 +29086,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "显示刘海"
+          }
+        }
+      }
+    },
+    "Show alarm marker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show alarm marker"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示警报标记"
           }
         }
       }
@@ -29305,6 +29809,24 @@
         }
       }
     },
+    "Stack": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "堆叠"
+          }
+        }
+      }
+    },
     "Staged system updates.": {
       "comment": "Disk Map (1.6.0)",
       "extractionState": "manual",
@@ -29571,6 +30093,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "状态"
+          }
+        }
+      }
+    },
+    "State dot": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State dot"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状态圆点"
           }
         }
       }
@@ -30673,6 +31213,24 @@
         }
       }
     },
+    "Tachometer": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tachometer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "转速表"
+          }
+        }
+      }
+    },
     "Taken straight from the kernel's swap usage figure (vm.swapusage.xsu_used). Swap lives on disk, not in RAM, so it is shown on its own and is not part of the total-RAM split.": {
       "comment": "Metric Cards & Explanations",
       "extractionState": "manual",
@@ -30795,6 +31353,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "温度"
+          }
+        }
+      }
+    },
+    "Text": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文本"
           }
         }
       }
@@ -32379,6 +32955,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "把该进程和其他进程作为一组，一起追踪内存占用。"
+          }
+        }
+      }
+    },
+    "Transfer speed": {
+      "comment": "Menu bar widget shapes, ported from Stats.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer speed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "传输速度"
           }
         }
       }
@@ -35605,6 +36199,23 @@
         }
       }
     },
+    "none chosen": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "none chosen"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未选择"
+          }
+        }
+      }
+    },
     "not yet documented": {
       "comment": "Process Explorer & Tables",
       "extractionState": "manual",
@@ -36105,6 +36716,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "持续高 CPU"
+          }
+        }
+      }
+    },
+    "sustained high GPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sustained high GPU"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GPU 持续高负载"
           }
         }
       }
