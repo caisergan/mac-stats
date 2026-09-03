@@ -233,7 +233,7 @@ public enum DiskMapSnapshotCodec {
             guard offset + size <= data.count else { throw DiskMapSnapshotError.corrupt }
             var value: T = 0
             withUnsafeMutableBytes(of: &value) { target in
-                data.copyBytes(
+                _ = data.copyBytes(
                     to: target, from: (data.startIndex + offset)..<(data.startIndex + offset + size)
                 )
             }
