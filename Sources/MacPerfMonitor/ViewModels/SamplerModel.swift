@@ -656,12 +656,38 @@ final class SamplerModel: ObservableObject {
         queue.async { [weak self] in
             guard let self, enabled != self.perAppNetworkEnabled else { return }
             self.perAppNetworkEnabled = enabled
+            // A freshly installed reader starts at the background cadence, so
+            // forget what the last one was told or the next tick would see no
+            // change and leave a visible panel on the slow pace.
+            self.networkReaderInteractive = false
             self.scanQueue.async {
                 self.sampler.setNetworkProcessReader(enabled ? NetworkProcessReader() : nil)
             }
             if !enabled {
                 DispatchQueue.main.async { self.menuLists.update(.network, with: []) }
             }
+        }
+    }
+
+    /// What the per-app network reader was last told about whether anything is
+    /// displaying its rates. Confined to `queue`.
+    private var networkReaderInteractive = false
+
+    /// Pace the per-app network reader for whoever is watching. The reader
+    /// exists whenever tracking is on, because the per-app byte history needs
+    /// it, but the five-second display cadence only earns its process-spawn
+    /// churn while a surface is actually showing those rates: the network menu
+    /// bar popover, or anything in the main window consuming the process list
+    /// (the Network tab's top-apps card, the process table). With nothing open
+    /// the reader feeds only the history, which is bucketed to the minute, so
+    /// it drops to the background cadence. Runs on `queue`.
+    private func updateNetworkReaderPacing(openPopoverKinds: Set<MenuListKind>) {
+        let interactive =
+            perAppNetworkEnabled && (processConsumers > 0 || openPopoverKinds.contains(.network))
+        guard interactive != networkReaderInteractive else { return }
+        networkReaderInteractive = interactive
+        scanQueue.async { [weak self] in
+            self?.sampler.setNetworkProcessInteractive(interactive)
         }
     }
 
@@ -1061,6 +1087,7 @@ final class SamplerModel: ObservableObject {
         var openPopoverKinds = Set(popoverKindConsumers.filter { $0.value > 0 }.keys)
         if !perAppNetworkEnabled { openPopoverKinds.remove(.network) }
         let popoverOpen = !openPopoverKinds.isEmpty
+        updateNetworkReaderPacing(openPopoverKinds: openPopoverKinds)
         if popoverOpen {
             popoverTickCounter += 1
         } else {
