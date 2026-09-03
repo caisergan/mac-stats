@@ -216,12 +216,22 @@ final class SamplerModel: ObservableObject {
     private let diagnostics = TickDiagnostics()
     private var timer: DispatchSourceTimer?
 
-    /// The status items' cue: every tick, at the dial rate. Each controller
-    /// compares the figures it would draw with the ones it last drew and only
-    /// re-renders on a change, so at 250 ms a status item repaints when a digit
-    /// moves, not four times a second. (It was throttled to ~1 Hz while every
-    /// tick re-rendered unconditionally.)
-    private(set) lazy var menuBarTick: AnyPublisher<Void, Never> = liveTick.eraseToAnyPublisher()
+    /// The status items' cue: every tick, deliberately NOT behind the refresh
+    /// dial's `uiDue` gate that `liveTick` sits behind.
+    ///
+    /// The dial exists to throttle the expensive work: the process scan, the
+    /// re-sort, the table rebuild. The system sample underneath the menu bar is
+    /// taken every tick whatever the dial says (`LiveRefreshCadence.baseInterval`
+    /// clamps the sampler to 1 Hz at any slower setting), so gating the bar on
+    /// the dial bought no sampling saving and only made the figures stale: at the
+    /// 2 s setting the bar redrew every 1.89 s against the 1 s of comparable
+    /// monitors, measured. Each controller compares the figures it would draw
+    /// with the ones it last drew and re-renders only on a change, so this is a
+    /// cheap signal: at 250 ms a status item repaints when a digit moves, not
+    /// four times a second.
+    private(set) lazy var menuBarTick: AnyPublisher<Void, Never> =
+        menuBarTickSubject.eraseToAnyPublisher()
+    private let menuBarTickSubject = PassthroughSubject<Void, Never>()
     /// Held for the lifetime of sampling. On macOS 26/27 the QoS + `.strict` timer
     /// still aren't enough on their own to keep an occluded menu-bar agent's 1 Hz
     /// timer alive — this `userInitiated` activity is the third leg that, together
@@ -1086,10 +1096,12 @@ final class SamplerModel: ObservableObject {
                 self.recentGPUSamples = []
                 self.gpuHistoryRing = []
             }
-            // The visible heartbeat. The rings above append on every tick so
-            // charts keep full 1 s resolution, but the redraw signal honours
-            // the refresh dial: at 10 s the menu-bar image and every live
-            // chart advance ten seconds of data at a time.
+            // The visible heartbeat, in two speeds. The rings above append on
+            // every tick, so the bar redraws off every fresh sample; the charts
+            // and the table still honour the refresh dial, and at 10 s they
+            // advance ten seconds of data at a time.
+            self.menuBarTickSubject.send()
+            diagnostics.recordUIPublish()
             if uiDue { self.liveTick.send() }
             diagnostics.recordPublish(duration: TickDiagnostics.now() - publishStart)
         }
