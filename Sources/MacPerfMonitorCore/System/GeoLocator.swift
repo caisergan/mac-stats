@@ -15,7 +15,10 @@ public struct GeoInfo: Sendable, Equatable {
 /// databases are expected; anything else fails to open and every consumer
 /// degrades to hidden columns.
 ///
-/// Thread-safe: the file is memory-mapped once at init and never mutated.
+/// Thread-safe: the file is read once at init and never mutated, and the
+/// lookup cache is lock-guarded. Opening reads (and copies) the whole database,
+/// which is ~9 MB for Country and far more for City, so construct it off the
+/// main thread.
 public final class GeoLocator {
     /// Default location for the downloaded database.
     public static func defaultDatabaseURL() -> URL {
@@ -48,7 +51,14 @@ public final class GeoLocator {
         if bytes.count >= marker.count {
             var index = bytes.count - marker.count
             while index >= scanStart {
-                if Array(bytes[index..<index + marker.count]) == marker {
+                // Compare in place: allocating an Array per candidate offset
+                // walked ~200k throwaway allocations before finding the marker.
+                var matched = true
+                for offset in 0..<marker.count where bytes[index + offset] != marker[offset] {
+                    matched = false
+                    break
+                }
+                if matched {
                     metadataStart = index + marker.count
                     break
                 }
@@ -82,8 +92,32 @@ public final class GeoLocator {
         self.dataStart = treeBytes + 16
     }
 
+    /// Every address looked up so far, hits and misses alike. The connection
+    /// table asks for a row's country every time the row is drawn, so an
+    /// uncached lookup walked the prefix tree once per row per frame.
+    private let cacheLock = NSLock()
+    private var cache: [String: GeoInfo?] = [:]
+
     /// Look up one IPv4/IPv6 address. Unknown or private addresses return nil.
+    /// Cached, so repeated lookups of the same address are a dictionary hit.
     public func lookup(_ ip: String) -> GeoInfo? {
+        cacheLock.lock()
+        if let cached = cache[ip] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        let info = uncachedLookup(ip)
+        cacheLock.lock()
+        // A session browsing many hosts must not grow this without limit;
+        // wholesale reset on overflow is fine for a display cache.
+        if cache.count >= 4_096 { cache.removeAll(keepingCapacity: true) }
+        cache[ip] = .some(info)
+        cacheLock.unlock()
+        return info
+    }
+
+    private func uncachedLookup(_ ip: String) -> GeoInfo? {
         var address = in_addr()
         var address6 = in6_addr()
         var bytes: [UInt8]
@@ -159,7 +193,7 @@ public final class GeoLocator {
     /// pointers are relative to (metadata start or data-section start).
     fileprivate static func decode(_ bytes: [UInt8], _ offset: inout Int, base: Int) -> Value? {
         guard offset < bytes.count else { return nil }
-        var control = bytes[offset]
+        let control = bytes[offset]
         offset += 1
         var type = Int((control >> 5) & 0x7)
         if type == 1 {  // pointer

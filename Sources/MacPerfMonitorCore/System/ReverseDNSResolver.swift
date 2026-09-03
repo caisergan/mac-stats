@@ -19,17 +19,26 @@ public final class ReverseDNSResolver {
 
     public init() {}
 
-    /// The cached answer, hit or miss. Nil when unresolved or the OS has no PTR.
-    public func cachedHostname(for ip: String) -> String? {
+    /// The cached answer if this IP has been resolved before: `.some(name)` for
+    /// a hit, `.some(nil)` for a cached miss, `nil` when it has never been
+    /// looked up. The two nils must stay distinguishable, or a miss (which most
+    /// remote addresses are, since few have a PTR record) re-dispatches a
+    /// `getnameinfo` every time the row is drawn.
+    public func cachedAnswer(for ip: String) -> String?? {
         lock.lock()
         defer { lock.unlock() }
-        return cache[ip] ?? nil
+        return cache[ip]
+    }
+
+    /// The cached hostname, or nil when unresolved or the OS has no PTR.
+    public func cachedHostname(for ip: String) -> String? {
+        cachedAnswer(for: ip) ?? nil
     }
 
     /// Resolve off the caller's thread and report back. The completion runs on
     /// an arbitrary background queue; hop to main before touching views.
     public func resolve(_ ip: String, completion: @escaping @Sendable (String?) -> Void) {
-        if let cached = cachedHostname(for: ip) {
+        if let cached = cachedAnswer(for: ip) {
             completion(cached)
             return
         }

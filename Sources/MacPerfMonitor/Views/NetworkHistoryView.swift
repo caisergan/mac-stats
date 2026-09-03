@@ -10,7 +10,6 @@ import UniformTypeIdentifiers
 /// per-app tracking is on, connection rows only while that toggle is on.
 struct NetworkHistoryPanel: View {
     @EnvironmentObject private var model: SamplerModel
-    @EnvironmentObject private var appMode: AppModeManager
     @EnvironmentObject private var appState: AppState
     @AppStorage(SamplerModel.perAppNetworkDefaultsKey) private var trackPerApp = true
     @AppStorage(SamplerModel.connectionHistoryDefaultsKey) private var trackConnections =
@@ -26,15 +25,29 @@ struct NetworkHistoryPanel: View {
     @State private var chartMode: ChartMode = .total
     @State private var expandedApp: String?
     @State private var showClearConfirmation = false
+    /// The per-app table shows the heaviest apps and hides the long tail
+    /// behind a disclosure: the query returns up to 100 rows and the panel
+    /// rebuilds on every refresh, so rendering all of them eagerly cost more
+    /// than the rows were worth.
+    @State private var showsAllApps = false
+    private static let collapsedAppLimit = 12
+    @State private var exportError: String?
 
     /// Lazily opened when the geo database is installed; nil otherwise, which
     /// is what hides the country column.
     @State private var geo: GeoLocator?
 
-    /// The auto-refresh timer, recreated on appear. Matches the per-app
-    /// sampling cadence (nettop produces a snapshot about every 5 s), so the
-    /// panel tracks live traffic while it is on screen.
-    static let refreshInterval: TimeInterval = 5
+    /// The auto-refresh cadence, scaled to the period on screen. The Hour view
+    /// tracks live traffic at the per-app sampling cadence (nettop produces a
+    /// snapshot about every 5 s); a 30 d or All view moves by less than a pixel
+    /// in five seconds, so refreshing it that often only spent database reads.
+    static func refreshInterval(for period: NetworkHistoryPeriod) -> TimeInterval {
+        switch period {
+        case .lastHour: return 5
+        case .oneDay: return 15
+        case .sevenDays, .thirtyDays, .all: return 60
+        }
+    }
     @State private var refreshCancellable: AnyCancellable?
 
     private static let palette: [Color] = [
@@ -62,14 +75,31 @@ struct NetworkHistoryPanel: View {
             }
         }
         .onAppear {
-            if geo == nil { geo = GeoLocator(url: GeoLocator.defaultDatabaseURL()) }
+            loadGeoDatabase()
             reload()
             startAutoRefresh()
         }
         .onDisappear { stopAutoRefresh() }
-        .onChange(of: period) { _, _ in reload() }
+        .onChange(of: period) { _, _ in
+            // The series cache is keyed by app, not by period: keeping it would
+            // draw the previous period's buckets under the new period's axis.
+            appSeries.removeAll()
+            reload()
+            startAutoRefresh()
+        }
+        .onChange(of: chartMode) { _, _ in reload() }
         .onChange(of: trackPerApp) { _, _ in reload() }
         .onChange(of: trackConnections) { _, _ in reload() }
+        .alert(
+            "Could not save the CSV",
+            isPresented: Binding(
+                get: { exportError != nil }, set: { if !$0 { exportError = nil } }),
+            presenting: exportError
+        ) { _ in
+            Button("OK") { exportError = nil }
+        } message: {
+            Text($0)
+        }
         .confirmationDialog(
             "Clear network history?", isPresented: $showClearConfirmation,
             titleVisibility: .visible
@@ -108,6 +138,14 @@ struct NetworkHistoryPanel: View {
             .controlSize(.small)
             .fixedSize()
             .onChange(of: interfaceFilter) { _, _ in reload() }
+            .onChange(of: bundle.interfaces) { _, interfaces in
+                // A period change can retire the selected interface; without
+                // this the picker renders blank and the chart keeps the stale
+                // filter.
+                if let name = interfaceFilter, !interfaces.contains(where: { $0.name == name }) {
+                    interfaceFilter = nil
+                }
+            }
 
             Spacer()
 
@@ -370,12 +408,16 @@ struct NetworkHistoryPanel: View {
         return bundle.apps
     }
 
-    /// The per-app chart: the top apps, each its own colored line of amounts.
+    /// The per-app chart: the top apps, each its own colored line of the app's
+    /// total transferred bytes. Plotting download alone drew an upload-only app
+    /// (a backup daemon, a sync client) as a flat line at zero while the
+    /// scrub read-out beside it showed tens of gigabytes uploaded; the read-out
+    /// still breaks each app's point into the two directions.
     private var perAppTrendSeries: [TrendSeries] {
         displayedApps.prefix(6).enumerated().map { index, app in
             TrendSeries(
                 points: (appSeries[app.id] ?? []).map {
-                    TrendPoint(date: $0.date, value: $0.downloaded)
+                    TrendPoint(date: $0.date, value: $0.downloaded + $0.uploaded)
                 },
                 color: Self.palette[index % Self.palette.count], lineWidth: 1.8)
         }
@@ -394,11 +436,25 @@ struct NetworkHistoryPanel: View {
         return 0...MenuChart.niceUpperBound(peak * 1.1)
     }
 
+    /// What the chart and the read-out describe: the machine, or the selected
+    /// interface. The per-app table has no interface dimension (nettop counts
+    /// per process, not per link), so it always covers every interface and
+    /// says so when a filter is on.
+    private var displayedTotals: NetworkHistoryTotals {
+        guard let name = interfaceFilter,
+            let interface = bundle.interfaces.first(where: { $0.name == name })
+        else { return bundle.totals }
+        return NetworkHistoryTotals(
+            downloaded: interface.downloaded, uploaded: interface.uploaded)
+    }
+
     private var totalsCaption: String {
-        String(
+        let amounts = String(
             format: t("%1$@ down · %2$@ up"),
-            ByteFormat.string(bundle.totals.downloaded),
-            ByteFormat.string(bundle.totals.uploaded))
+            ByteFormat.string(displayedTotals.downloaded),
+            ByteFormat.string(displayedTotals.uploaded))
+        guard let name = interfaceFilter else { return amounts }
+        return "\(amounts) · \(name)"
     }
 
     // MARK: - Per-app table
@@ -412,7 +468,14 @@ struct NetworkHistoryPanel: View {
             } else if displayedApps.isEmpty {
                 emptyHint("No app network history recorded for this period yet.")
             } else {
-                ForEach(Array(displayedApps.enumerated()), id: \.element.id) { index, app in
+                if interfaceFilter != nil {
+                    Text("Per-app usage covers every interface.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.bottom, 4)
+                }
+                let rows = visibleApps
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, app in
                     AppUsageRow(
                         app: app,
                         downloadedShare: share(of: app, side: .download),
@@ -420,10 +483,31 @@ struct NetworkHistoryPanel: View {
                         color: Self.palette[index % Self.palette.count],
                         isExpanded: expandedApp == app.id,
                         onToggle: { toggleExpand(app) })
-                    if index < displayedApps.count - 1 { Divider() }
+                    if index < rows.count - 1 { Divider() }
+                }
+                if displayedApps.count > Self.collapsedAppLimit {
+                    Divider()
+                    Button {
+                        showsAllApps.toggle()
+                    } label: {
+                        Text(
+                            showsAllApps
+                                ? t("Show fewer")
+                                : String(
+                                    format: t("Show all %d apps"), displayedApps.count))
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .padding(.top, 6)
                 }
             }
         }
+    }
+
+    /// The rows actually rendered: the heaviest apps unless the user asked for
+    /// the whole list.
+    private var visibleApps: [NetworkAppUsage] {
+        showsAllApps ? displayedApps : Array(displayedApps.prefix(Self.collapsedAppLimit))
     }
 
     private enum ChartSide { case download, upload }
@@ -438,15 +522,10 @@ struct NetworkHistoryPanel: View {
         return Double(bytes) / Double(combined)
     }
 
+    /// The expanded row owns its own series (it has its own period picker), so
+    /// this only tracks which row is open.
     private func toggleExpand(_ app: NetworkAppUsage) {
-        if expandedApp == app.id {
-            expandedApp = nil
-        } else {
-            expandedApp = app.id
-            if appSeries[app.id] == nil {
-                loadAppSeries(app)
-            }
-        }
+        expandedApp = expandedApp == app.id ? nil : app.id
     }
 
     private func loadAppSeries(_ app: NetworkAppUsage) {
@@ -465,14 +544,14 @@ struct NetworkHistoryPanel: View {
                 Image(systemName: "arrow.down").foregroundStyle(NetworkStyle.download)
                 Text("Download").font(.caption)
                 Spacer()
-                Text(ByteFormat.string(bundle.totals.downloaded))
+                Text(ByteFormat.string(displayedTotals.downloaded))
                     .font(.callout.monospacedDigit())
             }
             HStack(spacing: 6) {
                 Image(systemName: "arrow.up").foregroundStyle(NetworkStyle.upload)
                 Text("Upload").font(.caption)
                 Spacer()
-                Text(ByteFormat.string(bundle.totals.uploaded))
+                Text(ByteFormat.string(displayedTotals.uploaded))
                     .font(.callout.monospacedDigit())
             }
             Divider()
@@ -542,9 +621,14 @@ struct NetworkHistoryPanel: View {
     private func reload(force: Bool = false) {
         model.loadNetworkHistory(period, forceReload: force) { fresh in
             bundle = fresh
-            // Refresh the top apps' series with every reload so the per-app
-            // chart and the scrub read-out track live traffic; the queries are
-            // small aggregate reads.
+            // Only the per-app chart mode reads these, and each is its own
+            // database round trip. Fetching all six on every refresh regardless
+            // of what was on screen made the panel six queries more expensive
+            // than it needed to be, on a timer, for a chart nobody was looking
+            // at. The expanded row loads its own series.
+            guard chartMode == .perApp else { return }
+            let wanted = Set(fresh.apps.prefix(6).map(\.id))
+            appSeries = appSeries.filter { wanted.contains($0.key) }
             for app in fresh.apps.prefix(6) {
                 loadAppSeries(app)
             }
@@ -558,6 +642,18 @@ struct NetworkHistoryPanel: View {
         }
     }
 
+    /// Open the geolocation database off the main thread: it is a whole-file
+    /// read (~9 MB for Country, far more for City) and doing it inline stalled
+    /// the panel's first frame.
+    private func loadGeoDatabase() {
+        guard geo == nil else { return }
+        let url = GeoLocator.defaultDatabaseURL()
+        DispatchQueue.global(qos: .utility).async {
+            let locator = GeoLocator(url: url)
+            DispatchQueue.main.async { geo = locator }
+        }
+    }
+
     /// Refresh the whole panel every `refreshInterval` seconds while the main
     /// window is visible. The panel disappears with the tab or window, which
     /// stops the timer; the visibility gate additionally covers a tab that the
@@ -565,7 +661,7 @@ struct NetworkHistoryPanel: View {
     private func startAutoRefresh() {
         stopAutoRefresh()
         refreshCancellable =
-            Timer.publish(every: Self.refreshInterval, on: .main, in: .common)
+            Timer.publish(every: Self.refreshInterval(for: period), on: .main, in: .common)
             .autoconnect()
             .sink { _ in
                 guard appState.mainWindowVisible else { return }
@@ -588,7 +684,11 @@ struct NetworkHistoryPanel: View {
         panel.nameFieldStringValue = "network-history-\(period.rawValue).csv"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                exportError = error.localizedDescription
+            }
         }
     }
 }
@@ -648,11 +748,11 @@ private struct AppUsageRow: View {
 /// locally selected period (defaulting to 24 h, finer than the panel's own).
 private struct AppDetail: View {
     @EnvironmentObject private var model: SamplerModel
-    @EnvironmentObject private var appMode: AppModeManager
     @EnvironmentObject private var appState: AppState
     let app: NetworkAppUsage
     @State private var series: [NetworkUsagePoint] = []
     @State private var selectedPeriod: NetworkHistoryPeriod = .oneDay
+    @State private var refreshCancellable: AnyCancellable?
 
     private enum Side { case download, upload }
 
@@ -681,15 +781,35 @@ private struct AppDetail: View {
             .frame(height: 90)
         }
         .padding(.leading, 34)
-        .onAppear { load() }
-        .onChange(of: selectedPeriod) { _, _ in load() }
-        .onReceive(
-            Timer.publish(every: NetworkHistoryPanel.refreshInterval, on: .main, in: .common)
-                .autoconnect()
-        ) { _ in
-            guard appState.mainWindowVisible else { return }
+        .onAppear {
             load()
+            startAutoRefresh()
         }
+        .onDisappear {
+            refreshCancellable?.cancel()
+            refreshCancellable = nil
+        }
+        .onChange(of: selectedPeriod) { _, _ in
+            load()
+            startAutoRefresh()
+        }
+    }
+
+    /// A stored subscription rather than an `onReceive` over a publisher built
+    /// inside `body`: that rebuilt the timer on every body pass and paced it
+    /// off the panel's period, not this row's own.
+    private func startAutoRefresh() {
+        refreshCancellable?.cancel()
+        refreshCancellable =
+            Timer.publish(
+                every: NetworkHistoryPanel.refreshInterval(for: selectedPeriod), on: .main,
+                in: .common
+            )
+            .autoconnect()
+            .sink { _ in
+                guard appState.mainWindowVisible else { return }
+                load()
+            }
     }
 
     private func load() {
@@ -896,7 +1016,7 @@ private struct NetworkHistoryCSV {
     }
 }
 
-private func emptyHint(_ text: String) -> some View {
+private func emptyHint(_ text: LocalizedStringKey) -> some View {
     Text(text)
         .font(.callout)
         .foregroundStyle(.secondary)
