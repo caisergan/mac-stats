@@ -90,14 +90,21 @@ final class SamplerModel: ObservableObject {
     private var recentCPUSamples: [CPUSample] = []
     private var cpuSmoothingTicks: Int
 
-    /// Recent network samples for the ~5 s smoothing window the menubar read-out
-    /// uses, so the download/upload figures settle instead of flickering at the
-    /// full tick rate. The most recent also carries the live session totals and
-    /// primary interface for the menu. Touched only on the main thread.
-    private var recentNetworkSamples: [NetworkSample] = []
-    /// Recent physical-device samples for the ~5 s menu bar smoothing window.
-    /// The most recent entry also carries per-device identity and health counters.
-    private var recentDiskSamples: [DiskSample] = []
+    /// The newest network sample: the throughput figures every read-out draws,
+    /// plus the live session totals and primary interface for the menu.
+    ///
+    /// Deliberately one sample, not a trailing window. Throughput is already an
+    /// average: the reader differences the interface byte counters over the tick
+    /// and divides by the elapsed time, so a sample IS the mean rate for that
+    /// second. Averaging those again added a second, invisible lag on top and
+    /// made the bar visibly slower to react than other monitors, which draw the
+    /// per-second delta raw. CPU keeps its window because a CPU sample is an
+    /// instant, not an interval, and genuinely does flicker.
+    /// Touched only on the main thread.
+    private var recentNetworkSample: NetworkSample?
+    /// The newest physical-device sample: throughput plus per-device identity and
+    /// health counters. Unwindowed, for the same reason as the network sample.
+    private var recentDiskSample: DiskSample?
 
     /// The most recent battery sample, captured every fast tick (1 to 4 Hz). The
     /// published `latest` snapshot carries battery only on the slower heavy
@@ -209,12 +216,22 @@ final class SamplerModel: ObservableObject {
     private let diagnostics = TickDiagnostics()
     private var timer: DispatchSourceTimer?
 
-    /// The status items' cue: every tick, at the dial rate. Each controller
-    /// compares the figures it would draw with the ones it last drew and only
-    /// re-renders on a change, so at 250 ms a status item repaints when a digit
-    /// moves, not four times a second. (It was throttled to ~1 Hz while every
-    /// tick re-rendered unconditionally.)
-    private(set) lazy var menuBarTick: AnyPublisher<Void, Never> = liveTick.eraseToAnyPublisher()
+    /// The status items' cue: every tick, deliberately NOT behind the refresh
+    /// dial's `uiDue` gate that `liveTick` sits behind.
+    ///
+    /// The dial exists to throttle the expensive work: the process scan, the
+    /// re-sort, the table rebuild. The system sample underneath the menu bar is
+    /// taken every tick whatever the dial says (`LiveRefreshCadence.baseInterval`
+    /// clamps the sampler to 1 Hz at any slower setting), so gating the bar on
+    /// the dial bought no sampling saving and only made the figures stale: at the
+    /// 2 s setting the bar redrew every 1.89 s against the 1 s of comparable
+    /// monitors, measured. Each controller compares the figures it would draw
+    /// with the ones it last drew and re-renders only on a change, so this is a
+    /// cheap signal: at 250 ms a status item repaints when a digit moves, not
+    /// four times a second.
+    private(set) lazy var menuBarTick: AnyPublisher<Void, Never> =
+        menuBarTickSubject.eraseToAnyPublisher()
+    private let menuBarTickSubject = PassthroughSubject<Void, Never>()
     /// Held for the lifetime of sampling. On macOS 26/27 the QoS + `.strict` timer
     /// still aren't enough on their own to keep an occluded menu-bar agent's 1 Hz
     /// timer alive — this `userInitiated` activity is the third leg that, together
@@ -1150,10 +1167,12 @@ final class SamplerModel: ObservableObject {
                 self.recentGPUSamples = []
                 self.gpuHistoryRing = []
             }
-            // The visible heartbeat. The rings above append on every tick so
-            // charts keep full 1 s resolution, but the redraw signal honours
-            // the refresh dial: at 10 s the menu-bar image and every live
-            // chart advance ten seconds of data at a time.
+            // The visible heartbeat, in two speeds. The rings above append on
+            // every tick, so the bar redraws off every fresh sample; the charts
+            // and the table still honour the refresh dial, and at 10 s they
+            // advance ten seconds of data at a time.
+            self.menuBarTickSubject.send()
+            diagnostics.recordUIPublish()
             if uiDue { self.liveTick.send() }
             diagnostics.recordPublish(duration: TickDiagnostics.now() - publishStart)
         }
@@ -1473,30 +1492,23 @@ final class SamplerModel: ObservableObject {
     /// rebuilt (cores and all) by every status item and view that read it.
     private var cachedSmoothedCPU: CPUSample?
 
-    /// Keep the trailing ~5 s of network samples for menubar read-out smoothing.
-    /// Reuses the CPU smoothing window (same fast-tick cadence). A nil sample
-    /// (interface list unreadable) is ignored rather than dropping the buffer.
+    /// Take the tick's network sample. A nil sample (interface list unreadable)
+    /// is ignored rather than blanking the read-out.
     private func appendRecentNetwork(_ network: NetworkSample?) {
         guard let network else { return }
-        recentNetworkSamples.append(network)
-        if recentNetworkSamples.count > cpuSmoothingTicks {
-            recentNetworkSamples.removeFirst(recentNetworkSamples.count - cpuSmoothingTicks)
-        }
+        recentNetworkSample = network
     }
 
     private func appendRecentDisk(_ disk: DiskSample?) {
         guard let disk else { return }
-        recentDiskSamples.append(disk)
-        if recentDiskSamples.count > cpuSmoothingTicks {
-            recentDiskSamples.removeFirst(recentDiskSamples.count - cpuSmoothingTicks)
-        }
+        recentDiskSample = disk
     }
 
     /// The most recent network sample (live session totals + primary interface),
     /// or nil until the first interface read lands.
-    var latestNetwork: NetworkSample? { recentNetworkSamples.last }
+    var latestNetwork: NetworkSample? { recentNetworkSample }
 
-    var latestDisk: DiskSample? { recentDiskSamples.last }
+    var latestDisk: DiskSample? { recentDiskSample }
 
     /// The freshest GPU sample (utilization, render/tiler, in-use memory, name), or
     /// nil when the GPU item is off or before the first read. Drives the popover.
@@ -1523,23 +1535,16 @@ final class SamplerModel: ObservableObject {
     /// read-outs stay live at 1 Hz instead of the slower heavy `latest` cadence.
     var latestBattery: BatterySample? { recentBattery }
 
-    /// Download/upload throughput averaged over the trailing smoothing window
-    /// (~5 s), so the menubar figures settle rather than flick on every tick. Nil
-    /// until the first sample lands.
-    var smoothedNetworkRates: (inBytesPerSec: Double, outBytesPerSec: Double)? {
-        guard !recentNetworkSamples.isEmpty else { return nil }
-        let n = Double(recentNetworkSamples.count)
-        let inSum = recentNetworkSamples.reduce(0.0) { $0 + $1.inBytesPerSec }
-        let outSum = recentNetworkSamples.reduce(0.0) { $0 + $1.outBytesPerSec }
-        return (inSum / n, outSum / n)
+    /// This tick's download and upload rates, as measured. Nil until the first
+    /// sample lands. See `recentNetworkSample` for why they are not averaged
+    /// further.
+    var networkRates: (inBytesPerSec: Double, outBytesPerSec: Double)? {
+        recentNetworkSample.map { ($0.inBytesPerSec, $0.outBytesPerSec) }
     }
 
-    var smoothedDiskRates: (readBytesPerSec: Double, writeBytesPerSec: Double)? {
-        guard !recentDiskSamples.isEmpty else { return nil }
-        let count = Double(recentDiskSamples.count)
-        let read = recentDiskSamples.reduce(0.0) { $0 + $1.readBytesPerSec }
-        let write = recentDiskSamples.reduce(0.0) { $0 + $1.writeBytesPerSec }
-        return (read / count, write / count)
+    /// This tick's read and write rates, as measured.
+    var diskRates: (readBytesPerSec: Double, writeBytesPerSec: Double)? {
+        recentDiskSample.map { ($0.readBytesPerSec, $0.writeBytesPerSec) }
     }
 
     func diskReadTrail() -> [Double] {

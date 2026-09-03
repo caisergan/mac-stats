@@ -150,7 +150,7 @@ final class NetworkStatusItemController: NSObject {
     private func refreshImage() {
         guard let button = statusItem?.button else { return }
 
-        guard let rates = model.smoothedNetworkRates else {
+        guard let rates = model.networkRates else {
             // Before the first interface read: a plain glyph rather than zeros.
             stopFlicker()
             if shownSignature != "network-glyph" {

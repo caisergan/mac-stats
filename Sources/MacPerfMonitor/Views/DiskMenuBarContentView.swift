@@ -31,7 +31,7 @@ struct DiskMenuBarContentView: View {
     }
 
     private var header: some View {
-        let rates = model.smoothedDiskRates
+        let rates = model.diskRates
         return HStack(spacing: 20) {
             rateColumn("Read", rates?.readBytesPerSec, tint: DiskStyle.read)
             rateColumn("Write", rates?.writeBytesPerSec, tint: DiskStyle.write)

@@ -306,13 +306,42 @@ final class SMCReader {
         return Self.decode(type: type, bytes: bytes)
     }
 
+    /// Every key the SMC enumerates, with no filtering: the sensors panel
+    /// classifies by first letter (T/V/P/I) itself, and needs the voltage,
+    /// current and power keys that `discover()` deliberately skips.
+    func allKeyNames() -> [String] {
+        guard open() else { return [] }
+        guard let total = readUInt32(Self.fourCC("#KEY")), total > 0 else { return [] }
+        return (0..<total).compactMap { keyAtIndex($0).map(Self.toString) }
+    }
+
+    /// The reading for a key given by name, for callers working from the
+    /// catalogue rather than from discovery.
+    func readValue(named name: String) -> Double? {
+        guard open() else { return nil }
+        return readFloat(Self.fourCC(name))
+    }
+
+    /// An SMC string value (`ch8*`), which is how the fans carry their names.
+    func readString(named name: String) -> String? {
+        guard open(), let (type, bytes) = readKey(Self.fourCC(name)), type == "ch8*" else {
+            return nil
+        }
+        let trimmed = bytes.prefix { $0 != 0 }
+        guard !trimmed.isEmpty, let text = String(bytes: trimmed, encoding: .utf8) else {
+            return nil
+        }
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
     private func readUInt32(_ key: UInt32) -> UInt32? {
         guard let (_, bytes) = readKey(key), bytes.count >= 4 else { return nil }
         return UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8
             | UInt32(bytes[3])
     }
 
-    private func readKey(_ key: UInt32) -> (type: String, bytes: [UInt8])? {
+    func readKey(_ key: UInt32) -> (type: String, bytes: [UInt8])? {
         var info = SMCParamStruct()
         info.key = key
         info.data8 = 9  // kSMCGetKeyInfo

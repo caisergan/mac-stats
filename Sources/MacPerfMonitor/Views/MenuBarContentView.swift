@@ -48,18 +48,32 @@ struct MenuBarContentView: View {
         let system = model.liveSystem
         let level = system?.pressureLevel ?? .normal
         return VStack(alignment: .leading, spacing: 6) {
+            // The verdict is named, not just stated. "Warning 47%" on its own
+            // reads as a share of something, and the panel is one line away
+            // from a RAM figure in the eighties: two unlike numbers, and
+            // nothing to say which is which. The pressure index is a 0 to 100
+            // health signal (docs/pressure-index.md), not a share of RAM.
             HStack(spacing: 8) {
                 Image(systemName: level.symbolName)
                     .foregroundStyle(level.color)
-                Text(level.label)
-                    .font(.headline)
-                    .foregroundStyle(level.color)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Memory pressure")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(level.label)
+                        .font(.headline)
+                        .foregroundStyle(level.color)
+                }
                 Spacer()
                 if let percent = system?.pressurePercent {
                     Text("\(Int(percent.rounded()))%")
                         .font(.headline.monospacedDigit())
+                        .foregroundStyle(level.color)
                 }
             }
+            .help(
+                "How hard the memory system is working, 0 to 100: compression, swap, and the trend. Not the share of RAM in use, which is below."
+            )
 
             MenuTrendChart(
                 values: model.systemHistory.elements().map(\.pressurePercent),
@@ -69,8 +83,17 @@ struct MenuBarContentView: View {
             .frame(height: MenuChart.height)
 
             if let system {
-                HStack {
+                HStack(spacing: 5) {
                     Text("\(ByteFormat.string(usedBytes(system))) used")
+                    // The share the RAM read-out shows, spelled out here so the
+                    // two figures in this panel are told apart rather than
+                    // guessed at.
+                    if system.totalRAM > 0 {
+                        let share =
+                            Double(usedBytes(system)) / Double(system.totalRAM) * 100
+                        Text(verbatim: "(\(Int(share.rounded()))%)")
+                            .foregroundStyle(.tertiary)
+                    }
                     Spacer()
                     Text("\(ByteFormat.string(system.totalRAM)) total")
                 }

@@ -25,6 +25,8 @@ case "sample":
     runSample(arguments: Array(arguments.dropFirst(2)))
 case "scan":
     runScan(arguments: Array(arguments.dropFirst(2)))
+case "sensors":
+    runSensors(arguments: Array(arguments.dropFirst(2)))
 case "emit-checks":
     // Emit the built-in diagnostic check catalog as JSON, so the publish script can
     // seed the server manifest from the in-app pack without drift.
@@ -77,6 +79,7 @@ func printUsage() {
           macperfmonitor-cli probe                      Probe per-process read coverage and system memory (default)
           macperfmonitor-cli sample [options]           Continuously sample into the database
           macperfmonitor-cli scan [path] [options]      Scan a folder or volume with the Disk Map engine
+          macperfmonitor-cli sensors [--unknown]        Print every readable SMC sensor, grouped as the panel shows them
           macperfmonitor-cli help                       Show this help
 
         scan options (path defaults to the home folder; / means the startup disk):

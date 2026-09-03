@@ -160,7 +160,7 @@ struct DiskUsageView: View {
     // MARK: - Headline cards
 
     private var headlineCards: some View {
-        let rates = model.smoothedDiskRates
+        let rates = model.diskRates
         let disk = model.latestDisk
         return MetricCardsRow(
             cards: [
