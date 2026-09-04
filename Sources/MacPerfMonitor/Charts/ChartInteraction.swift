@@ -73,3 +73,55 @@ struct ScrollWheelCatcher: NSViewRepresentable {
         deinit { removeMonitor() }
     }
 }
+
+/// The floating read-out a scrubbed chart pins beside its marker: the sample's
+/// wall-clock time above one row per value. Shared so every hoverable chart
+/// (Swift Charts or `TrendChart`) tells the reading the same way.
+struct ChartScrubCard<Content: View>: View {
+    let date: Date
+    @ViewBuilder var content: () -> Content
+
+    init(date: Date, @ViewBuilder content: @escaping () -> Content) {
+        self.date = date
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(date, format: .dateTime.hour().minute().second())
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.secondary.opacity(0.15))
+        )
+        .fixedSize()
+        .allowsHitTesting(false)
+    }
+}
+
+/// One labelled reading inside a `ChartScrubCard`: a dot in the series' colour,
+/// the series name, then the formatted value.
+struct ChartScrubRow: View {
+    let color: Color
+    let name: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(name)
+                .font(.caption2)
+            Spacer(minLength: 10)
+            Text(value)
+                .font(.caption2.weight(.semibold).monospacedDigit())
+        }
+    }
+}

@@ -327,9 +327,11 @@ struct BatteryView: View {
     /// record answers "and what did that cost".
     private var thermalPanel: some View {
         BatteryPanel("Thermals", systemImage: "thermometer.medium") {
-            TemperatureChart(points: points, xDomain: chartDomain, showsTimeAxis: true)
-                .frame(height: 150)
-                .chartReloading(awaitingData)
+            TemperatureChart(
+                points: points, xDomain: chartDomain, showsTimeAxis: true, scrubbable: true
+            )
+            .frame(height: 150)
+            .chartReloading(awaitingData)
             if let status = thermalStatus {
                 Text(status)
                     .font(.callout.weight(.medium))
@@ -337,7 +339,7 @@ struct BatteryView: View {
             }
             if hasFanHistory {
                 Divider().opacity(0.5)
-                FanChart(points: points, xDomain: chartDomain)
+                FanChart(points: points, xDomain: chartDomain, scrubbable: true)
                     .frame(height: 90)
                     .chartReloading(awaitingData)
             }
@@ -405,7 +407,8 @@ struct BatteryView: View {
             BatteryChart(
                 points: points,
                 currentLevel: BatteryLevel(percent: battery.chargePercent),
-                xDomain: chartDomain
+                xDomain: chartDomain,
+                scrubbable: true
             )
             .frame(height: 160)
             .chartReloading(awaitingData)

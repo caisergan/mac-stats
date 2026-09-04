@@ -33,6 +33,13 @@ struct TemperatureChart: View {
     let points: [SystemHistoryPoint]
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
+    /// Hovering the plot pins a marker and reads out both dies at that sample.
+    var scrubbable = false
+
+    /// The scrubbed point reported by `TrendChart`, nil when the pointer
+    /// leaves. Only its time is used: the read-out quotes both series at that
+    /// sample, which the chart's own single-value read-out cannot do.
+    @State private var scrubPoint: TrendScrubPoint?
 
     private var cpuPoints: [TrendPoint] {
         points.compactMap { point in
@@ -62,20 +69,71 @@ struct TemperatureChart: View {
     }
 
     var body: some View {
-        TrendChart(
-            series: [
-                TrendSeries(points: cpuPoints, color: ThermalStyle.cpu, filled: true),
-                TrendSeries(
-                    points: gpuPoints, color: ThermalStyle.gpu, filled: false, lineWidth: 1.8),
-            ],
-            xDomain: xDomain,
-            yDomain: temperatureDomain,
-            yFormat: { String(format: "%.0f°C", $0) },
-            showsTimeAxis: showsTimeAxis
-        )
+        ZStack(alignment: .topLeading) {
+            TrendChart(
+                series: [
+                    TrendSeries(points: cpuPoints, color: ThermalStyle.cpu, filled: true),
+                    TrendSeries(
+                        points: gpuPoints, color: ThermalStyle.gpu, filled: false, lineWidth: 1.8),
+                ],
+                xDomain: xDomain,
+                yDomain: temperatureDomain,
+                yFormat: { Self.degrees($0) },
+                showsTimeAxis: showsTimeAxis,
+                scrubbable: scrubbable,
+                scrubReporting: { scrubPoint = $0 },
+                scrubReadout: false
+            )
+            if scrubbable { scrubReadout }
+        }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Die temperature trend")
         .accessibilityValue(accessibilitySummary)
     }
+
+    /// Floating read-out beside the scrub marker, placed with the same geometry
+    /// `TrendChart` draws the marker from so the card tracks it exactly. Both
+    /// dies are listed, because the marker alone cannot say which line it sits
+    /// on.
+    @ViewBuilder private var scrubReadout: some View {
+        GeometryReader { geo in
+            let plot = TrendChartGeometry(leftGutter: 38, showsTimeAxis: showsTimeAxis)
+                .plotRect(in: geo.size)
+            if let scrubPoint, let reading = reading(at: scrubPoint.date) {
+                let xx = plot.minX + scrubPoint.fraction * plot.width
+                ChartScrubCard(date: reading.date) {
+                    if let cpu = reading.cpuDieC {
+                        ChartScrubRow(
+                            color: ThermalStyle.cpu, name: "CPU", value: Self.degrees(cpu))
+                    }
+                    if let gpu = reading.gpuDieC {
+                        ChartScrubRow(
+                            color: ThermalStyle.gpu, name: "GPU", value: Self.degrees(gpu))
+                    }
+                }
+                .position(x: min(max(xx, plot.minX + 52), plot.maxX - 52), y: plot.minY + 22)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The sample the marker sits on: the nearest one that read the SMC at all,
+    /// so scrubbing across a gap still quotes a real reading.
+    private func reading(at date: Date) -> SystemHistoryPoint? {
+        var best: SystemHistoryPoint?
+        var bestDelta = Double.greatestFiniteMagnitude
+        for point in points where point.cpuDieC != nil || point.gpuDieC != nil {
+            let delta = abs(point.date.timeIntervalSince(date))
+            if delta < bestDelta {
+                bestDelta = delta
+                best = point
+            }
+        }
+        return best
+    }
+
+    /// Whole degrees, matching the axis labels and the status line beneath.
+    static func degrees(_ value: Double) -> String { String(format: "%.0f°C", value) }
 
     /// A stable floor-to-headroom domain: starting the axis at 0 wastes half
     /// the plot (die sensors never read near 0), while a tight auto-fit makes
@@ -95,6 +153,8 @@ struct FanChart: View {
     let points: [SystemHistoryPoint]
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
+    /// Hovering the plot pins a marker and reads out the sample under it.
+    var scrubbable = false
 
     private var fanPoints: [TrendPoint] {
         points.compactMap { point in
@@ -118,6 +178,7 @@ struct FanChart: View {
             xDomain: xDomain,
             yFormat: { t("%@ rpm", String(format: "%.0f", max($0, 0))) },
             showsTimeAxis: showsTimeAxis,
+            scrubbable: scrubbable,
             leftGutter: 56
         )
         .accessibilityLabel("Fan speed trend")

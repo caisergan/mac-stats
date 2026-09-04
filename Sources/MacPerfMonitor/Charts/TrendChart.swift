@@ -198,14 +198,26 @@ struct TrendChart: View {
         return xDomain.map { _ in max(span / 360 * 15, 30) }
     }
 
-    /// The point of any series nearest the scrubbed time.
+    /// The point of any series nearest the scrubbed time, considered only
+    /// within the plotted window.
+    ///
+    /// A live chart's window ends at the newest sample and so slides forward
+    /// with every tick, while the series it is handed were loaded once for a
+    /// window ending at the load's "now": the oldest points fall out behind the
+    /// domain's start, in a strip that widens the longer the view stays open.
+    /// Without the bounds check, scrubbing near the left edge locked onto one of
+    /// those, which put the marker outside the plot (over the axis gutter) and
+    /// read out a time from before the window.
     private func nearestPoint(fraction: CGFloat, tMin: Double, span: Double) -> TrendScrubPoint? {
         let target = tMin + Double(fraction) * span
+        let tMax = tMin + span
         var best: TrendPoint?
         var bestDistance = Double.greatestFiniteMagnitude
         for s in series {
             for p in s.points {
-                let distance = abs(p.date.timeIntervalSinceReferenceDate - target)
+                let t = p.date.timeIntervalSinceReferenceDate
+                guard t >= tMin, t <= tMax else { continue }
+                let distance = abs(t - target)
                 if distance < bestDistance {
                     bestDistance = distance
                     best = p
