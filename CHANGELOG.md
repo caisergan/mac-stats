@@ -20,6 +20,20 @@ Notable changes to Mac Performance Monitor. This project follows
   Connection recording is off by default; it runs the system's nettop tool
   once every 30 seconds while enabled.
 
+### Fixed
+
+- The menu bar panel was slow to appear. Closing it threw the popover away
+  along with its SwiftUI content, so every open rebuilt the panel from
+  nothing: NSPopover made a fresh window, re-attached the hosting view, and
+  laid the whole panel out twice. Measured on a warm app, that was 60-85 ms
+  per open and about 220 ms on the first one, and a release build was no
+  faster because nearly all of it was inside AppKit and SwiftUI rather than
+  in our own code. The popover and its hosting controller are now kept
+  across closes, and a visibility gate drops the content subtree instead, so
+  a hidden panel still observes nothing and costs nothing. The panel also
+  learns of a close from the popover delegate rather than on the next menu
+  bar tick, so it stops working the moment it goes away.
+
 ## [1.7.0] - 2026-09-01
 
 ### Added
