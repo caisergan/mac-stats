@@ -559,18 +559,17 @@ enum StatsMenuBarWidgets {
     /// left. Stats' Network module ships coloured dots as that marker and the
     /// Disk module ships the letters R and W, so each keeps its own here.
     ///
-    /// DEVIATION: Stats' stored default puts the outbound row on top; this keeps
-    /// inbound (download, read) on top, matching the rest of this app's readouts
-    /// and its accessibility summary.
+    /// Which rate is on top is `directionRows`' to say (upload over download for
+    /// the network, read over write for the disk), and the marker takes its
+    /// colour from the row it sits beside rather than from its position, so the
+    /// two can never disagree about which line is which.
     private static func speed(_ readout: CombinedMenuBarReadout, _ isDark: Bool) -> Cell {
         let icon: SpeedIcon = readout.metric == .disk ? .chars : .dots
         let rowWidth: CGFloat = 48
         let iconWidth: CGFloat = 7
         let width = iconWidth + rowWidth
-        let inputText = readout.value
-        let outputText = readout.secondaryValue ?? ""
-        let inputColor = readout.speedIconColor(input: true, isDark: isDark)
-        let outputColor = readout.speedIconColor(input: false, isDark: isDark)
+        let rows = readout.directionRows
+        let iconColors = rows.map { readout.speedIconColor(input: $0.isInbound, isDark: isDark) }
         let symbols = readout.speedSymbols
 
         return Cell(width: width) { originX in
@@ -578,11 +577,11 @@ enum StatsMenuBarWidgets {
                 let rowHeight = Metrics.frameHeight / 2
                 let style = NSMutableParagraphStyle()
                 style.alignment = .right
-                let inputY = rowHeight + 1
-                let outputY: CGFloat = 1
+                // Top row first, in step with `rows`.
+                let rowYs: [CGFloat] = [rowHeight + 1, 1]
 
                 let valueColor = textColor(isDark)
-                for (text, y) in [(inputText, inputY), (outputText, outputY)] {
+                for (row, y) in zip(rows, rowYs) {
                     let attributes: [NSAttributedString.Key: Any] = [
                         .font: NSFont.systemFont(ofSize: 9, weight: .light),
                         .foregroundColor: valueColor,
@@ -591,14 +590,15 @@ enum StatsMenuBarWidgets {
                     let rect = CGRect(
                         x: Metrics.marginX + iconWidth, y: y,
                         width: rowWidth - (Metrics.marginX * 2), height: rowHeight)
-                    NSAttributedString(string: text, attributes: attributes).draw(with: rect)
+                    NSAttributedString(string: row.text, attributes: attributes).draw(with: rect)
                 }
 
                 switch icon {
                 case .dots:
                     let size: CGFloat = 6
                     let dotY = (rowHeight - size) / 2
-                    for (color, y) in [(inputColor, 10.5), (outputColor, dotY - 0.2)] {
+                    let dotYs: [CGFloat] = [10.5, dotY - 0.2]
+                    for (color, y) in zip(iconColors, dotYs) {
                         let circle = NSBezierPath(
                             ovalIn: CGRect(
                                 x: Metrics.marginX, y: y, width: size, height: size))
@@ -606,9 +606,7 @@ enum StatsMenuBarWidgets {
                         circle.fill()
                     }
                 case .chars:
-                    for (symbol, color, y) in [
-                        (symbols.input, inputColor, inputY), (symbols.output, outputColor, outputY),
-                    ] {
+                    for ((row, color), y) in zip(zip(rows, iconColors), rowYs) {
                         let attributes: [NSAttributedString.Key: Any] = [
                             .font: NSFont.systemFont(ofSize: 9, weight: .regular),
                             .foregroundColor: color,
@@ -616,6 +614,7 @@ enum StatsMenuBarWidgets {
                         ]
                         let rect = CGRect(
                             x: Metrics.marginX, y: y, width: 8, height: rowHeight)
+                        let symbol = row.isInbound ? symbols.input : symbols.output
                         NSAttributedString(string: symbol, attributes: attributes).draw(with: rect)
                     }
                 }

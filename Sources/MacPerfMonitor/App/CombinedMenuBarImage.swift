@@ -177,12 +177,11 @@ enum CombinedMenuBarReadouts {
             // Sensors filled its own rows in `baseReadout`: one per chosen
             // sensor, which is the whole point of the read-out.
             if readout.metric != .sensors {
-                readout.stackRows = [readout.value, readout.secondaryValue].compactMap { $0 }
+                readout.stackRows = readout.directionRows.map(\.text)
             }
 
         case .text:
-            readout.textValue = [readout.value, readout.secondaryValue]
-                .compactMap { $0 }.joined(separator: " / ")
+            readout.textValue = readout.directionRows.map(\.text).joined(separator: " / ")
 
         case .mini, .speed, .battery, .batteryDetails, .label:
             break

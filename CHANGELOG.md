@@ -19,9 +19,34 @@ Notable changes to Mac Performance Monitor. This project follows
   GeoLite2 database is installed (Scripts/fetch-geolite.sh), country flags.
   Connection recording is off by default; it runs the system's nettop tool
   once every 30 seconds while enabled.
+- The memory panel now says how much memory has been swapped out to disk,
+  under the used/total line. Swap lives on the SSD rather than in RAM, so it
+  is none of the figures beside it: the same "82% used" means one thing with
+  nothing swapped and something else entirely with gigabytes of it. The
+  pressure index at the top of the panel already counts swap without ever
+  saying how much of it there is.
+
+### Changed
+
+- The menu bar panel's read-out chips line up. Every title now sits on one
+  baseline and every figure on the one below, where a chip carrying two
+  figures (NET, DSK) used to push its own title up out of line with its
+  neighbours'. A chip with one figure prints it larger, taking the room the
+  second row would have used, and the dot marking a read-out as shown in the
+  menu bar is gone from the titles (the tooltip still says so). The alarm
+  triangle hangs off the end of a title rather than sitting in the row with
+  it, so it no longer shoves a title off centre.
+- The network read-out puts upload above download, in the menu bar strip and
+  in the panel's chip alike. The coloured dots beside the two rows take their
+  colour from the row they sit next to rather than from where they sit, so
+  they cannot disagree with the figures about which line is which. The disk
+  read-out is unchanged: read stays on top, where the R and W drawn beside
+  the rows say which is which anyway.
 
 ### Fixed
 
+- A throughput figure too wide for its chip in the menu bar panel was
+  truncated ("48.7 M..."). It now shrinks to fit.
 - The menu bar panel was slow to appear. Closing it threw the popover away
   along with its SwiftUI content, so every open rebuilt the panel from
   nothing: NSPopover made a fresh window, re-attached the hosting view, and

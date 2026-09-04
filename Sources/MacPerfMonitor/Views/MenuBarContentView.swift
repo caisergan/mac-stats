@@ -99,8 +99,39 @@ struct MenuBarContentView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                swapLine(system)
             }
         }
+    }
+
+    /// How much memory has been pushed out to disk.
+    ///
+    /// It is none of the figures on the line above: swap lives on the SSD, not
+    /// in RAM, so the same "82% used" means one thing with nothing swapped and
+    /// something else entirely with gigabytes of it. The pressure index at the
+    /// top of the panel already counts swap without ever saying how much of it
+    /// there is, and this is the figure the heavy-swap alarm fires on.
+    private func swapLine(_ system: SystemSample) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "internaldrive")
+                .imageScale(.small)
+            if system.swapUsed > 0 {
+                // Formatted into a local first: the localisation audit reads the
+                // key straight off the literal, and it cannot see through a call
+                // with brackets of its own inside the interpolation.
+                let swapped = ByteFormat.string(system.swapUsed)
+                Text("\(swapped) swapped to disk")
+            } else {
+                Text("No swap in use")
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .help(
+            "Swap is memory moved out to disk. A flat line at zero is ideal; a sustained climb under pressure is the real warning sign."
+        )
     }
 
     /// Activity Monitor's "Memory Used": app memory plus wired plus compressed.

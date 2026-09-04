@@ -1799,6 +1799,24 @@
         }
       }
     },
+    "%@ swapped to disk": {
+      "comment": "MenuBarContentView",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ swapped to disk"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已换出到磁盘 %@"
+          }
+        }
+      }
+    },
     "%@ then, %@ now": {
       "comment": "Disk Map (1.6.0)",
       "extractionState": "manual",
@@ -21493,6 +21511,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "近期窗口内没有持续的高 CPU 占用。"
+          }
+        }
+      }
+    },
+    "No swap in use": {
+      "comment": "MenuBarContentView",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No swap in use"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有使用交换内存"
           }
         }
       }

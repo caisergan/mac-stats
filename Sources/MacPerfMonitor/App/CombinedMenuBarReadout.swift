@@ -50,6 +50,24 @@ struct CombinedMenuBarReadout {
         metric == .disk ? ("R", "W") : ("D", "U")
     }
 
+    /// The figures a two-direction read-out stacks, top row first, each paired
+    /// with the direction it stands for so a marker drawn beside it can be
+    /// coloured to match.
+    ///
+    /// Network prints upload over download: the two rows are unlabelled digits
+    /// in the strip and in the panel's chips, so wherever they are drawn they
+    /// have to agree on which one is on top, and one property is what makes
+    /// that possible. Disk keeps read on top, where the R and W drawn beside
+    /// the rows say which is which anyway.
+    ///
+    /// A single-figure read-out is one row, and nothing reads its direction.
+    var directionRows: [(text: String, isInbound: Bool)] {
+        guard let secondaryValue else { return [(value, true)] }
+        return metric == .network
+            ? [(secondaryValue, false), (value, true)]
+            : [(value, true), (secondaryValue, false)]
+    }
+
     /// The pie and tachometer segments. CPU splits into system over user the way
     /// Stats' CPU pie does; the two-direction metrics show both directions; the
     /// rest are a single arc coloured by the metric's own scale.

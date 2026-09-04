@@ -86,46 +86,9 @@ struct CombinedMenuBarContentView: View {
                 Button {
                     selection.metric = metric
                 } label: {
-                    VStack(spacing: 3) {
-                        HStack(spacing: 2) {
-                            // Nine read-outs share this row, so the title must
-                            // never wrap: "RAM" broke onto two lines once
-                            // Sensors joined and each cell lost a few points.
-                            Text(metric.shortTitle)
-                                .font(.caption2.weight(.semibold))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                            Circle()
-                                .frame(width: 4, height: 4)
-                                .opacity(configuration.isSelected(metric) ? 1 : 0)
-                                .accessibilityHidden(true)
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .frame(width: 8)
-                                .opacity(showsAlarm ? 1 : 0)
-                                .accessibilityHidden(!showsAlarm)
-                        }
-                        if let secondary = readout?.secondaryValue {
-                            VStack(spacing: -2) {
-                                Text(readout?.value ?? "--")
-                                Text(secondary)
-                            }
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .lineLimit(1)
-                        } else {
-                            Text(readout?.value ?? "--")
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .lineLimit(1)
-                        }
-                    }
-                    .foregroundStyle(Color.primary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(
-                        Self.selectorMetric(for: selection.metric) == metric
-                            ? Color.accentColor.opacity(0.16) : .clear
-                    )
-                    .contentShape(Rectangle())
+                    chip(
+                        metric: metric, readout: readout, showsAlarm: showsAlarm,
+                        isCurrent: Self.selectorMetric(for: selection.metric) == metric)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
@@ -146,6 +109,77 @@ struct CombinedMenuBarContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.22)))
     }
+
+    /// One cell of the selector: the three-letter title with the metric's figure
+    /// (or a throughput read-out's two figures) directly under it.
+    ///
+    /// Every part of this is about keeping one row of titles and one row of
+    /// figures. The stack is pinned to the top of a cell tall enough for the
+    /// tallest of them, so NET and DSK cannot push their own titles up out of
+    /// line with their neighbours' the way they did when each cell centred
+    /// whatever it happened to hold.
+    /// The alarm triangle hangs off the title as an overlay rather than sitting
+    /// in the row with it: inline it shoved the title off centre, and reserving
+    /// its width on both sides to stop that left a three-letter title nothing to
+    /// sit in. Hung off the end it still reads as "RAM, warning" and still
+    /// clears the cell edge, because a centred three-letter title leaves more
+    /// room beside it than the triangle needs.
+    private func chip(
+        metric: MenuBarMetric, readout: CombinedMenuBarReadout?, showsAlarm: Bool,
+        isCurrent: Bool
+    ) -> some View {
+        let rows = readout.map { $0.directionRows.map(\.text) } ?? ["--"]
+        return VStack(spacing: 2) {
+            // Nine read-outs share this row, so the title must never wrap:
+            // "RAM" broke onto two lines once Sensors joined and each cell lost
+            // a few points.
+            Text(metric.shortTitle)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .overlay(alignment: .trailing) {
+                    if showsAlarm {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.red)
+                            .fixedSize()
+                            .offset(x: 11)
+                            .accessibilityHidden(true)
+                    }
+                }
+            // One figure gets the room two would have taken, which is most of
+            // the cell; two have to be small enough to stack in it. Either way
+            // a figure too wide for the cell shrinks to fit rather than
+            // truncating: "48.7 MB/s" used to arrive as "48.7 M...".
+            VStack(spacing: -2) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Text(row)
+                }
+            }
+            .font(
+                (rows.count > 1 ? Font.caption2 : Font.body)
+                    .weight(.semibold).monospacedDigit()
+            )
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 2)
+        }
+        .foregroundStyle(Color.primary)
+        .padding(.top, 5)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.chipHeight, alignment: .top)
+        .background(isCurrent ? Color.accentColor.opacity(0.16) : .clear)
+        .contentShape(Rectangle())
+    }
+
+    /// The height every chip gets: enough for the title and the two figures a
+    /// throughput read-out stacks under it, which is the tallest a chip can be.
+    ///
+    /// Stated rather than taken from the tallest chip, because a chip that asks
+    /// for whatever height is going is a chip that takes it: on the Sensors tab,
+    /// whose panel is long enough to be given a height rather than asked for
+    /// one, the selector grew to fill half the screen.
+    private static let chipHeight: CGFloat = 48
 
     /// The chips the panel offers.
     ///
