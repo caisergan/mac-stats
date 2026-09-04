@@ -52,6 +52,9 @@ final class CombinedStatusItemController: NSObject {
     private var gpuPanelLive = false
     private var currentPanel: MenuBarMetric
     private lazy var panelSelection = CombinedMenuBarPanelSelection(metric: currentPanel)
+    /// Drives `MenuBarPanelGate`: the panel's content subtree exists only while
+    /// the popover is on screen.
+    private let panelVisibility = MenuBarPanelVisibility()
 
     private lazy var menuClock = MenuClock(
         source: model.liveTick.eraseToAnyPublisher(),
@@ -215,8 +218,25 @@ final class CombinedStatusItemController: NSObject {
             ?? configuration.selectedMetrics.compactMap { separateItems[$0]?.button }.first
     }
 
+    /// Everything a close has to undo. Reached from the popover delegate the
+    /// moment it dismisses, and from the tick reconciler as a backstop.
+    private func panelClosed() {
+        menuClock.close()
+        // Drop the content subtree so the hidden panel observes nothing. The
+        // popover itself, its window and its hosting controller stay, which is
+        // what makes the next open cheap: rebuilding them costs a full layout
+        // of the panel, and that is the whole of the open latency.
+        //
+        // Guarded, not assigned unconditionally: `reconcileMenuClock` calls this
+        // on every menu bar tick while the panel is closed, and writing an
+        // unchanged value to a `@Published` still publishes, which would
+        // re-render the gate once a tick forever.
+        if panelVisibility.isOpen { panelVisibility.isOpen = false }
+    }
+
     func tearDownForQuit() {
         menuClock.close()
+        if panelVisibility.isOpen { panelVisibility.isOpen = false }
         popover?.performClose(nil)
         popover = nil
         detachRouter()
@@ -401,7 +421,7 @@ final class CombinedStatusItemController: NSObject {
                 selectPanel(metric)
                 if configuration.presentation == .separate {
                     popover.performClose(sender)
-                    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                    show(popover, from: button)
                 }
                 popover.contentViewController?.view.window?.makeKey()
                 return
@@ -415,6 +435,16 @@ final class CombinedStatusItemController: NSObject {
         }
         let popover = popover ?? makePopover()
         self.popover = popover
+        show(popover, from: button)
+    }
+
+    /// Raise the gate, then show. The order matters both ways round: the
+    /// content has to exist before NSPopover measures it, or the window is
+    /// sized from the closed placeholder; and closing lowers the gate through
+    /// the delegate, so a close-then-show (the separate-mode tab switch) must
+    /// raise it again or the panel comes back blank.
+    private func show(_ popover: NSPopover, from button: NSStatusBarButton) {
+        panelVisibility.isOpen = true
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -423,12 +453,15 @@ final class CombinedStatusItemController: NSObject {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = false
+        popover.delegate = self
         let content = LocaleRootView(languageManager: languageManager) {
-            CombinedMenuBarContentView(
-                selection: self.panelSelection,
-                selectionChanged: { [weak self] metric in self?.selectPanel(metric) },
-                dismiss: { [weak popover] in popover?.performClose(nil) }
-            )
+            MenuBarPanelGate(visibility: self.panelVisibility) {
+                CombinedMenuBarContentView(
+                    selection: self.panelSelection,
+                    selectionChanged: { [weak self] metric in self?.selectPanel(metric) },
+                    dismiss: { [weak popover] in popover?.performClose(nil) }
+                )
+            }
             .environmentObject(self.model)
             .environmentObject(self.model.menuLists)
             .environmentObject(self.appState)
@@ -545,12 +578,18 @@ final class CombinedStatusItemController: NSObject {
         if popover.isShown {
             menuClock.open()
         } else {
-            menuClock.close()
-            // Release the closed popover with its SwiftUI content: a retained
-            // hosting controller kept observing the menu lists and re-rendered
-            // the hidden panel on every table tick. The next open rebuilds it.
-            self.popover = nil
+            panelClosed()
         }
+        reconcileGPUSampling()
+    }
+}
+
+extension CombinedStatusItemController: NSPopoverDelegate {
+    /// Lower the gate as soon as the popover dismisses. `reconcileMenuClock`
+    /// would also catch it, but only on the next menu bar tick, which leaves the
+    /// hidden panel live (and re-rendering) for up to a full interval.
+    func popoverDidClose(_ notification: Notification) {
+        panelClosed()
         reconcileGPUSampling()
     }
 }
