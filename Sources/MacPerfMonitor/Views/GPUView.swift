@@ -233,7 +233,8 @@ struct GPUView: View {
                     points: thermalPoints,
                     xDomain: LiveChartGeometry.trailingDomain(
                         latest: thermalPoints.last?.date, span: range.seconds),
-                    showsTimeAxis: true
+                    showsTimeAxis: true,
+                    scrubbable: true
                 )
                 .frame(height: 140)
                 HStack(spacing: 22) {

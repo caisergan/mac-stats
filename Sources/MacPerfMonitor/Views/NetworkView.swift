@@ -218,7 +218,7 @@ struct NetworkView: View {
 
     private var throughputPanel: some View {
         NetworkPanel("Throughput", systemImage: "chart.xyaxis.line") {
-            NetworkChart(points: throughputPoints, xDomain: throughputDomain)
+            NetworkChart(points: throughputPoints, xDomain: throughputDomain, scrubbable: true)
                 .frame(height: 150)
             if let net = model.latestNetwork {
                 Text(

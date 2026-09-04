@@ -125,3 +125,46 @@ struct ChartScrubRow: View {
         }
     }
 }
+
+/// Places a scrub read-out beside a `TrendChart`'s marker, using the chart's own
+/// geometry so the card tracks the marker exactly.
+///
+/// For the charts whose read-out `TrendChart` cannot render itself: a marker on
+/// a two-line chart cannot say which line it sits on, so those pass
+/// `scrubReadout: false`, report the scrubbed point, and lay a card carrying a
+/// row per series over the plot with this.
+struct TrendScrubReadout<Content: View>: View {
+    let point: TrendScrubPoint?
+    let geometry: TrendChartGeometry
+    /// Half the card's width: how close to an edge the card may track the
+    /// marker before it stops, so it never hangs off the plot.
+    var inset: CGFloat = 60
+    /// The card's centre below the top of the plot.
+    var top: CGFloat = 22
+    @ViewBuilder var content: (TrendScrubPoint) -> Content
+
+    init(
+        point: TrendScrubPoint?, geometry: TrendChartGeometry, inset: CGFloat = 60,
+        top: CGFloat = 22, @ViewBuilder content: @escaping (TrendScrubPoint) -> Content
+    ) {
+        self.point = point
+        self.geometry = geometry
+        self.inset = inset
+        self.top = top
+        self.content = content
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let plot = geometry.plotRect(in: geo.size)
+            if let point {
+                let x = plot.minX + point.fraction * plot.width
+                content(point)
+                    .position(
+                        x: min(max(x, plot.minX + inset), plot.maxX - inset),
+                        y: plot.minY + top)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}

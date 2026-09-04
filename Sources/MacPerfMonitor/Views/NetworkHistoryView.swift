@@ -249,23 +249,15 @@ struct NetworkHistoryPanel: View {
         }
     }
 
-    /// Floating read-out beside the scrub marker, mirroring TrendChart's own
-    /// geometry so the card tracks the marker exactly.
+    /// Floating read-out beside the scrub marker.
     @ViewBuilder private var scrubReadout: some View {
-        GeometryReader { geo in
-            let plot = TrendChartGeometry(leftGutter: 56, showsTimeAxis: true).plotRect(
-                in: geo.size)
-            if let scrubPoint, chartHasData {
-                let xx = plot.minX + scrubPoint.fraction * plot.width
-                readoutCard(for: scrubPoint)
-                    .fixedSize()
-                    .allowsHitTesting(false)
-                    .position(
-                        x: min(max(xx, plot.minX + 90), plot.maxX - 90),
-                        y: plot.minY + 18)
-            }
+        TrendScrubReadout(
+            point: chartHasData ? scrubPoint : nil,
+            geometry: TrendChartGeometry(leftGutter: 56, showsTimeAxis: true),
+            inset: 90, top: 18
+        ) { point in
+            readoutCard(for: point).fixedSize()
         }
-        .allowsHitTesting(false)
     }
 
     private var chartHasData: Bool {

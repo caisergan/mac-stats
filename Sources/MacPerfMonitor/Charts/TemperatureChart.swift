@@ -96,11 +96,12 @@ struct TemperatureChart: View {
     /// dies are listed, because the marker alone cannot say which line it sits
     /// on.
     @ViewBuilder private var scrubReadout: some View {
-        GeometryReader { geo in
-            let plot = TrendChartGeometry(leftGutter: 38, showsTimeAxis: showsTimeAxis)
-                .plotRect(in: geo.size)
-            if let scrubPoint, let reading = reading(at: scrubPoint.date) {
-                let xx = plot.minX + scrubPoint.fraction * plot.width
+        TrendScrubReadout(
+            point: scrubPoint,
+            geometry: TrendChartGeometry(leftGutter: 38, showsTimeAxis: showsTimeAxis),
+            inset: 52
+        ) { point in
+            if let reading = reading(at: point.date) {
                 ChartScrubCard(date: reading.date) {
                     if let cpu = reading.cpuDieC {
                         ChartScrubRow(
@@ -111,10 +112,8 @@ struct TemperatureChart: View {
                             color: ThermalStyle.gpu, name: "GPU", value: Self.degrees(gpu))
                     }
                 }
-                .position(x: min(max(xx, plot.minX + 52), plot.maxX - 52), y: plot.minY + 22)
             }
         }
-        .allowsHitTesting(false)
     }
 
     /// The sample the marker sits on: the nearest one that read the SMC at all,

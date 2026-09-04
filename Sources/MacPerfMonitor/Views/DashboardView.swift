@@ -309,7 +309,8 @@ struct DashboardView: View {
             TemperatureChart(
                 points: thermalPoints,
                 xDomain: LiveChartGeometry.trailingDomain(
-                    latest: thermalPoints.last?.date, span: range.seconds)
+                    latest: thermalPoints.last?.date, span: range.seconds),
+                scrubbable: true
             )
             .frame(height: 110)
             .chartReloading(awaitingData)
