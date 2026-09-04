@@ -866,13 +866,17 @@ private struct ShareRow: View {
                     .foregroundStyle(.secondary)
             }
             GeometryReader { proxy in
+                // One point of the row is the gap between the two segments.
+                let track = max(0, proxy.size.width - 1)
+                let filled = track * CGFloat(combinedShare)
+                let down = downloaded > 0 ? min(filled, max(2, filled * downloadSplit)) : 0
                 HStack(spacing: 1) {
                     Capsule()
                         .fill(NetworkStyle.download)
-                        .frame(width: max(2, proxy.size.width * normalizedShare(downloadedShare)))
+                        .frame(width: down)
                     Capsule()
                         .fill(NetworkStyle.upload)
-                        .frame(width: max(0, proxy.size.width * normalizedShare(uploadedShare)))
+                        .frame(width: max(0, filled - down))
                     Spacer(minLength: 0)
                 }
             }
@@ -890,11 +894,15 @@ private struct ShareRow: View {
     /// 100% or the bar overflow the row.
     private var combinedShare: Double { min(1, downloadedShare + uploadedShare) }
 
-    /// Each segment as a fraction of the row width, so the two segments always
-    /// fit side by side no matter how the raw shares add up.
-    private func normalizedShare(_ share: Double) -> CGFloat {
-        guard combinedShare > 0 else { return 0 }
-        return CGFloat(min(1, share / combinedShare))
+    /// How the bar splits between the two directions. It divides the row's own
+    /// length, never the row width: scaling each segment to the width directly
+    /// drew every bar full, whatever the percentage beside it said, and on a row
+    /// whose raw shares summed past 100% (the capped case above) the pair ran
+    /// off the end of the sidebar and across the table next to it.
+    private var downloadSplit: CGFloat {
+        let raw = downloadedShare + uploadedShare
+        guard raw > 0 else { return 0 }
+        return CGFloat(downloadedShare / raw)
     }
 }
 
