@@ -28,6 +28,15 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Changed
 
+- Every timeline on the Dashboard and the Disk tab answers the pointer. Hover
+  the memory-pressure, processor, network, swap or physical-disk chart, or the
+  Disk tab's throughput, operations, service-time and free-space charts, and a
+  marker pins to the nearest sample with a card giving its wall-clock time and
+  the reading. Charts drawing two lines (download and upload, read and write)
+  name both and quote each one's value, since a marker on a two-line chart
+  cannot say which line it sits on. The service-time chart lists only the
+  directions that had IO at that moment rather than quoting a stale figure
+  across a quiet stretch.
 - The menu bar panel's read-out chips line up. Every title now sits on one
   baseline and every figure on the one below, where a chip carrying two
   figures (NET, DSK) used to push its own title up out of line with its

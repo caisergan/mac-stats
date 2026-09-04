@@ -224,9 +224,12 @@ struct DiskUsageView: View {
 
     private var throughputPanel: some View {
         DiskPanel("Throughput", systemImage: "internaldrive") {
-            DiskChart(points: points, xDomain: chartDomain, showsTimeAxis: true)
-                .frame(height: 170)
-                .chartReloading(awaitingData)
+            DiskChart(
+                points: points, xDomain: chartDomain, showsTimeAxis: true,
+                scrubbable: true
+            )
+            .frame(height: 170)
+            .chartReloading(awaitingData)
             footnote(
                 "Physical traffic across real internal and external disks. Disk images are excluded, and per-process attribution below may not add up to this: filesystem caching, metadata, and paging are device traffic too."
             )
@@ -248,13 +251,16 @@ struct DiskUsageView: View {
                 Spacer(minLength: 0)
             }
             chartCaption("OPERATIONS PER SECOND")
-            DiskIOPSChart(points: points, xDomain: chartDomain)
+            DiskIOPSChart(points: points, xDomain: chartDomain, scrubbable: true)
                 .frame(height: 110)
                 .chartReloading(awaitingData)
             chartCaption("SERVICE TIME PER OPERATION")
-            DiskLatencyChart(points: points, xDomain: chartDomain, showsTimeAxis: true)
-                .frame(height: 110)
-                .chartReloading(awaitingData)
+            DiskLatencyChart(
+                points: points, xDomain: chartDomain, showsTimeAxis: true,
+                scrubbable: true
+            )
+            .frame(height: 110)
+            .chartReloading(awaitingData)
             footnote(
                 "Service time is the device's average per completed operation; gaps mean no IO happened in that interval. Utilization is the busiest disk's share of time spent servicing IO."
             )
@@ -463,9 +469,12 @@ struct DiskUsageView: View {
 
     private var freeSpacePanel: some View {
         DiskPanel("Free space", systemImage: "chart.line.downtrend.xyaxis") {
-            FreeSpaceChart(points: points, xDomain: chartDomain, showsTimeAxis: true)
-                .frame(height: 120)
-                .chartReloading(awaitingData)
+            FreeSpaceChart(
+                points: points, xDomain: chartDomain, showsTimeAxis: true,
+                scrubbable: true
+            )
+            .frame(height: 120)
+            .chartReloading(awaitingData)
             purgeableSummary
             footnote(
                 "Boot volume free space over the selected range, sampled once a minute. On APFS this is the container's shared pool."

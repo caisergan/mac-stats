@@ -74,6 +74,30 @@ struct ScrollWheelCatcher: NSViewRepresentable {
     }
 }
 
+extension TrendPoint {
+    /// One series' value at the scrubbed sample, for the charts that quote
+    /// every line rather than the one the marker sits on.
+    ///
+    /// The lines a chart stacks are normally sampled on the same ticks, so the
+    /// marker's time matches a point of each exactly; the nearest is taken
+    /// anyway, and `tolerance` drops a line that has nothing near the marker
+    /// instead of quoting it from across a gap.
+    static func value(
+        at date: Date, in points: [TrendPoint], within tolerance: TimeInterval = .infinity
+    ) -> Double? {
+        var best: Double?
+        var bestDelta = TimeInterval.greatestFiniteMagnitude
+        for point in points {
+            let delta = abs(point.date.timeIntervalSince(date))
+            if delta < bestDelta {
+                bestDelta = delta
+                best = point.value
+            }
+        }
+        return bestDelta <= tolerance ? best : nil
+    }
+}
+
 /// The floating read-out a scrubbed chart pins beside its marker: the sample's
 /// wall-clock time above one row per value. Shared so every hoverable chart
 /// (Swift Charts or `TrendChart`) tells the reading the same way.

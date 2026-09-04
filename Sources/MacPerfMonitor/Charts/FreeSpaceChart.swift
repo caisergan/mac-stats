@@ -8,6 +8,9 @@ struct FreeSpaceChart: View {
     let points: [SystemHistoryPoint]
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
+    /// Hovering the plot pins a marker and reads out the free space at that
+    /// sample. One series, so `TrendChart`'s own read-out says it all.
+    var scrubbable = false
 
     private var freePoints: [TrendPoint] {
         points.compactMap { point in
@@ -58,6 +61,7 @@ struct FreeSpaceChart: View {
                 ]
             } ?? [],
             showsTimeAxis: showsTimeAxis,
+            scrubbable: scrubbable,
             leftGutter: 56
         )
         .accessibilityLabel("Boot volume free space trend")

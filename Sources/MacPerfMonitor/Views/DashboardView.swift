@@ -138,7 +138,7 @@ struct DashboardView: View {
 
     private var pressurePanel: some View {
         DashboardPanel("Memory pressure", systemImage: "gauge.with.dots.needle.50percent") {
-            LiveTrendChart(feed: timeline.pressureFeed)
+            LiveTrendChart(feed: timeline.pressureFeed, scrubbable: true)
                 .frame(height: 180)
                 .chartReloading(awaitingData)
             DashboardHistoryNote(timeline: timeline, hasHistory: model?.hasHistory ?? false)
@@ -150,7 +150,7 @@ struct DashboardView: View {
     private var processorPanel: some View {
         let hasClusters = topology.efficiencyCoreCount > 0 && topology.performanceCoreCount > 0
         return DashboardPanel("Processor", systemImage: "cpu") {
-            LiveTrendChart(feed: timeline.cpuFeed)
+            LiveTrendChart(feed: timeline.cpuFeed, scrubbable: true)
                 .frame(height: 160)
                 .chartReloading(awaitingData)
 
@@ -201,7 +201,7 @@ struct DashboardView: View {
                     "Upload", timeline.uploadFeed, NetworkStyle.upload, NetworkStyle.upSymbol)
                 Spacer(minLength: 0)
             }
-            LiveTrendChart(feed: timeline.networkFeed)
+            LiveTrendChart(feed: timeline.networkFeed, scrubbable: true)
                 .frame(height: 150)
                 .chartReloading(awaitingData)
             dashboardFootnote(
@@ -223,7 +223,7 @@ struct DashboardView: View {
 
     private var swapPanel: some View {
         DashboardPanel("Swap", systemImage: "internaldrive") {
-            LiveTrendChart(feed: timeline.swapFeed)
+            LiveTrendChart(feed: timeline.swapFeed, scrubbable: true)
                 .frame(height: 110)
                 .chartReloading(awaitingData)
             dashboardFootnote(
@@ -240,7 +240,7 @@ struct DashboardView: View {
                 liveStat("IOPS", timeline.iopsFeed, .labelColor)
                 Spacer(minLength: 0)
             }
-            LiveTrendChart(feed: timeline.diskFeed)
+            LiveTrendChart(feed: timeline.diskFeed, scrubbable: true)
                 .frame(height: 150)
                 .chartReloading(awaitingData)
             dashboardFootnote(
@@ -656,9 +656,12 @@ private final class DashboardTimelineStore: ObservableObject {
         let upload = LiveColumn(window, .networkOutBytesPerSec)
         var model = TrendModel()
         model.series = [
-            TrendSurfaceSeries(column: download, color: NetworkStyle.download, filled: true),
             TrendSurfaceSeries(
-                column: upload, color: NetworkStyle.upload, filled: false, lineWidth: 1.8),
+                column: download, color: NetworkStyle.download, filled: true,
+                name: t("Download")),
+            TrendSurfaceSeries(
+                column: upload, color: NetworkStyle.upload, filled: false, lineWidth: 1.8,
+                name: t("Upload")),
         ]
         model.xDomain = domain
         model.yDomain = yDomain
@@ -687,9 +690,11 @@ private final class DashboardTimelineStore: ObservableObject {
         let write = LiveColumn(window, .diskWriteBytesPerSec)
         var model = TrendModel()
         model.series = [
-            TrendSurfaceSeries(column: read, color: DiskStyle.read, filled: true),
             TrendSurfaceSeries(
-                column: write, color: DiskStyle.write, filled: false, lineWidth: 1.8),
+                column: read, color: DiskStyle.read, filled: true, name: t("Read")),
+            TrendSurfaceSeries(
+                column: write, color: DiskStyle.write, filled: false, lineWidth: 1.8,
+                name: t("Write")),
         ]
         model.xDomain = domain
         model.yDomain = yDomain

@@ -9,6 +9,11 @@ struct DiskLatencyChart: View {
     let points: [SystemHistoryPoint]
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
+    /// Hovering the plot pins a marker and reads out whichever directions had
+    /// a measurable service time at that sample.
+    var scrubbable = false
+
+    @State private var scrubPoint: TrendScrubPoint?
 
     private var readPoints: [TrendPoint] {
         points.compactMap { point in
@@ -42,17 +47,64 @@ struct DiskLatencyChart: View {
     }
 
     var body: some View {
-        TrendChart(
-            series: [
-                TrendSeries(points: readPoints, color: DiskStyle.read, filled: false),
-                TrendSeries(
-                    points: writePoints, color: DiskStyle.write, filled: false, lineWidth: 1.8),
-            ],
-            xDomain: xDomain,
-            yFormat: { String(format: "%.1f ms", max($0, 0)) },
-            showsTimeAxis: showsTimeAxis
-        )
+        let reads = readPoints
+        let writes = writePoints
+        ZStack(alignment: .topLeading) {
+            TrendChart(
+                series: [
+                    TrendSeries(points: reads, color: DiskStyle.read, filled: false),
+                    TrendSeries(
+                        points: writes, color: DiskStyle.write, filled: false, lineWidth: 1.8),
+                ],
+                xDomain: xDomain,
+                yFormat: { Self.milliseconds($0) },
+                showsTimeAxis: showsTimeAxis,
+                scrubbable: scrubbable,
+                scrubReporting: { scrubPoint = $0 },
+                scrubReadout: false
+            )
+            if scrubbable {
+                TrendScrubReadout(
+                    point: scrubPoint,
+                    geometry: TrendChartGeometry(leftGutter: 38, showsTimeAxis: showsTimeAxis),
+                    inset: 56
+                ) { point in
+                    ChartScrubCard(date: point.date) {
+                        // A direction with no IO near the marker has no service
+                        // time to give, so its row is left out rather than
+                        // quoted from whenever it was last busy.
+                        if let read = TrendPoint.value(
+                            at: point.date, in: reads, within: tolerance)
+                        {
+                            ChartScrubRow(
+                                color: DiskStyle.read, name: t("Read"),
+                                value: Self.milliseconds(read))
+                        }
+                        if let write = TrendPoint.value(
+                            at: point.date, in: writes, within: tolerance)
+                        {
+                            ChartScrubRow(
+                                color: DiskStyle.write, name: t("Write"),
+                                value: Self.milliseconds(write))
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Disk service time trend")
         .accessibilityValue(accessibilitySummary)
+    }
+
+    /// How far from the marker a sample may sit and still be its reading. A
+    /// twenty-fourth of the window is the same rule the live surfaces use to
+    /// decide a line has gapped.
+    private var tolerance: TimeInterval {
+        guard let xDomain else { return .infinity }
+        return max(xDomain.upperBound.timeIntervalSince(xDomain.lowerBound) / 24, 30)
+    }
+
+    private static func milliseconds(_ value: Double) -> String {
+        String(format: "%.1f ms", locale: .current, max(value, 0))
     }
 }

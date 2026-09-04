@@ -13,6 +13,12 @@ struct TrendSurfaceSeries {
     var color: Color
     var filled = false
     var lineWidth: CGFloat = 2
+    /// What the scrub read-out calls this line. Needed only where a chart draws
+    /// more than one: a marker on a two-line chart cannot say which line it sits
+    /// on, so the card names every line and quotes each one's value. With a
+    /// single line there is nothing to tell apart and the card shows the bare
+    /// figure it always has.
+    var name: String?
 }
 
 /// What a live chart surface draws: the same inputs as `TrendChart`, as a
@@ -596,6 +602,8 @@ final class ChartLabelCache {
         case axis
         case rule(NSColor)
         case readoutTime
+        /// A series' name in a multi-line read-out, beside its colour dot.
+        case readoutName
         case readoutValue
         /// Legend text: caption2 (10 pt), secondary, monospaced digits.
         case legend
@@ -607,6 +615,7 @@ final class ChartLabelCache {
             case .axis: return "axis"
             case .rule(let color): return "rule:\(color.description)"
             case .readoutTime: return "time"
+            case .readoutName: return "name"
             case .readoutValue: return "value"
             case .legend: return "legend"
             case .legendName: return "legendName"
@@ -625,7 +634,7 @@ final class ChartLabelCache {
                 ]
             case .rule(let color):
                 return [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: color.cgColor]
-            case .readoutTime:
+            case .readoutTime, .readoutName:
                 return [
                     .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize - 1),
                     .foregroundColor: NSColor.secondaryLabelColor.cgColor,
@@ -705,9 +714,20 @@ struct ChartLabel {
 enum TrendRenderer {
     /// A point on the scrubbed series.
     struct Nearest {
+        /// The sample the marker dot sits on, and the series it belongs to.
         var time: Double
         var value: Double
         var color: Color
+        /// One row per series that has a sample at this time, in the model's
+        /// own order. A single-series chart yields one nameless row, which the
+        /// card prints as the bare figure it always has.
+        var rows: [Row]
+
+        struct Row {
+            var color: Color
+            var name: String?
+            var value: Double
+        }
     }
 
     fileprivate typealias TickFrame = TrendSurfaceView.TickFrame
@@ -892,26 +912,45 @@ enum TrendRenderer {
         _ model: TrendModel, fraction: CGFloat, tick: TickFrame
     ) -> Nearest? {
         let target = tick.tMin + Double(fraction) * tick.span
-        var best: Nearest?
+        var rows: [Nearest.Row] = []
+        var best: (time: Double, value: Double, color: Color)?
         var bestDistance = Double.greatestFiniteMagnitude
         for s in model.series {
-            let times = s.column.times
-            guard !times.isEmpty else { continue }
-            var lo = times.startIndex
-            var hi = times.endIndex
-            while lo < hi {
-                let mid = lo + (hi - lo) / 2
-                if times[mid] < target { lo = mid + 1 } else { hi = mid }
+            // A series with no sample near the pointer is left out rather than
+            // quoted from across the gap: the latency chart plots only the
+            // intervals that had IO, so a quiet stretch has no reading to give.
+            guard let hit = nearestSample(in: s, to: target),
+                hit.distance <= tick.gapThreshold
+            else { continue }
+            rows.append(Nearest.Row(color: s.color, name: s.name, value: hit.value))
+            if hit.distance < bestDistance {
+                bestDistance = hit.distance
+                best = (hit.time, hit.value, s.color)
             }
-            let values = s.column.values
-            let valueOffset = values.startIndex - times.startIndex
-            for i in [lo - 1, lo] where i >= times.startIndex && i < times.endIndex {
-                let distance = abs(times[i] - target)
-                if distance < bestDistance {
-                    bestDistance = distance
-                    best = Nearest(
-                        time: times[i], value: values[i + valueOffset] * s.scale, color: s.color)
-                }
+        }
+        guard let best else { return nil }
+        return Nearest(time: best.time, value: best.value, color: best.color, rows: rows)
+    }
+
+    /// The sample of one series closest in time to `target`, already scaled.
+    private static func nearestSample(
+        in series: TrendSurfaceSeries, to target: Double
+    ) -> (time: Double, value: Double, distance: Double)? {
+        let times = series.column.times
+        guard !times.isEmpty else { return nil }
+        var lo = times.startIndex
+        var hi = times.endIndex
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if times[mid] < target { lo = mid + 1 } else { hi = mid }
+        }
+        let values = series.column.values
+        let valueOffset = values.startIndex - times.startIndex
+        var best: (time: Double, value: Double, distance: Double)?
+        for i in [lo - 1, lo] where i >= times.startIndex && i < times.endIndex {
+            let distance = abs(times[i] - target)
+            if distance < (best?.distance ?? .greatestFiniteMagnitude) {
+                best = (times[i], values[i + valueOffset] * series.scale, distance)
             }
         }
         return best
@@ -938,9 +977,27 @@ enum TrendRenderer {
         let time = labels.label(
             scrubTimeFormatter.string(from: Date(timeIntervalSinceReferenceDate: point.time)),
             style: .readoutTime)
-        let value = labels.label(model.yFormat(point.value), style: .readoutValue)
-        let width = max(time.size.width, value.size.width) + 12
-        let height = time.size.height + value.size.height + 7
+        // One row per line on the chart. A named row carries its colour dot and
+        // its name, so a two-line chart says which reading is which; an unnamed
+        // one is the bare figure a single-line chart has always shown.
+        let rows = point.rows.map {
+            (
+                color: NSColor($0.color),
+                name: $0.name.map { labels.label($0, style: .readoutName) },
+                value: labels.label(model.yFormat($0.value), style: .readoutValue)
+            )
+        }
+        let dotSize: CGFloat = 6
+        let dotGutter = rows.contains { $0.name != nil } ? dotSize + 5 : 0
+        let nameWidth = rows.compactMap { $0.name?.size.width }.max() ?? 0
+        let valueWidth = rows.map { $0.value.size.width }.max() ?? 0
+        let nameGap: CGFloat = nameWidth > 0 ? 10 : 0
+        let rowHeight = rows.map { $0.value.size.height }.max() ?? 0
+        let valueAscent = rows.map { $0.value.ascent }.max() ?? 0
+        let contentWidth = max(
+            time.size.width, dotGutter + nameWidth + nameGap + valueWidth)
+        let width = contentWidth + 12
+        let height = time.size.height + rowHeight * CGFloat(rows.count) + 7
         let originX = min(max(xx - width / 2, plot.minX), plot.maxX - width)
         let box = CGRect(x: originX, y: plot.minY + 2, width: width, height: height)
         let rounded = CGPath(
@@ -953,8 +1010,29 @@ enum TrendRenderer {
         ctx.setLineWidth(1)
         ctx.strokePath()
         time.draw(at: CGPoint(x: box.minX + 6, y: box.minY + 3), in: ctx)
-        value.draw(
-            at: CGPoint(x: box.minX + 6, y: box.minY + 3 + time.size.height + 1), in: ctx)
+        var rowY = box.minY + 3 + time.size.height + 1
+        for row in rows {
+            if let name = row.name {
+                ctx.setFillColor(row.color.cgColor)
+                ctx.fillEllipse(
+                    in: CGRect(
+                        x: box.minX + 6, y: rowY + (rowHeight - dotSize) / 2,
+                        width: dotSize, height: dotSize))
+                // On the value's baseline, not its top: the name is the smaller
+                // font, and sharing a top edge would leave it riding high.
+                name.draw(
+                    at: CGPoint(
+                        x: box.minX + 6 + dotGutter, y: rowY + valueAscent - name.ascent),
+                    in: ctx)
+            }
+            // With names present the figures right-align on the card's inner
+            // edge, so a column of rates reads straight down. On their own they
+            // stay under the time, where a one-line chart has always shown them.
+            let valueX =
+                dotGutter > 0 ? box.maxX - 6 - row.value.size.width : box.minX + 6
+            row.value.draw(at: CGPoint(x: valueX, y: rowY), in: ctx)
+            rowY += rowHeight
+        }
     }
 
     private static let scrubTimeFormatter: DateFormatter = {

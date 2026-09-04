@@ -97,10 +97,12 @@ struct NetworkChart: View {
                     ChartScrubCard(date: point.date) {
                         ChartScrubRow(
                             color: NetworkStyle.download, name: t("Download"),
-                            value: ByteFormat.rate(Self.value(at: point.date, in: downPoints)))
+                            value: ByteFormat.rate(
+                                TrendPoint.value(at: point.date, in: downPoints) ?? 0))
                         ChartScrubRow(
                             color: NetworkStyle.upload, name: t("Upload"),
-                            value: ByteFormat.rate(Self.value(at: point.date, in: upPoints)))
+                            value: ByteFormat.rate(
+                                TrendPoint.value(at: point.date, in: upPoints) ?? 0))
                     }
                 }
             }
@@ -110,19 +112,4 @@ struct NetworkChart: View {
         .accessibilityValue(accessibilitySummary)
     }
 
-    /// A series' rate at the scrubbed sample. Both series are sampled on the
-    /// same ticks, so the marker's time matches a point of each exactly; the
-    /// nearest one is taken anyway, in case one direction ever gaps.
-    private static func value(at date: Date, in points: [TrendPoint]) -> Double {
-        var best = 0.0
-        var bestDelta = Double.greatestFiniteMagnitude
-        for point in points {
-            let delta = abs(point.date.timeIntervalSince(date))
-            if delta < bestDelta {
-                bestDelta = delta
-                best = point.value
-            }
-        }
-        return best
-    }
 }
