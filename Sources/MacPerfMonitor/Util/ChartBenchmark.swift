@@ -269,7 +269,8 @@ enum ChartBenchmark {
             let values = store.window.values(.cpuLoad).suffix(900).map { $0 * 100 }
             MenuTrendChart(
                 values: values, sampleCapacity: 900, color: .green, domain: 0...100,
-                ticks: [0, 50, 100], label: { "\(Int($0))" }
+                ticks: [0, 50, 100], label: { "\(Int($0))" },
+                readoutName: t("CPU"), readoutValue: { "\(Int($0.rounded()))%" }
             )
             .frame(width: 380, height: MenuChart.height)
             .padding(12)

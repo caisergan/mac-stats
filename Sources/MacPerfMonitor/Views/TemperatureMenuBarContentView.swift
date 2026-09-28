@@ -59,7 +59,13 @@ struct TemperatureMenuBarContentView: View {
     /// live-window shape as the GPU panel's utilization sparkline.
     private var sparkline: some View {
         let capacity = 60
-        let values = model.systemHistory.elements().suffix(capacity).compactMap(\.cpuDieC)
+        // Paired with their timestamps before the readings without a die
+        // temperature are dropped, so the hover read-out dates the sample it
+        // quotes rather than the tick that happens to sit at that index.
+        let samples = model.systemHistory.elements().suffix(capacity).compactMap { sample in
+            sample.cpuDieC.map { (date: sample.timestamp, value: $0) }
+        }
+        let values = samples.map(\.value)
         let points = Array(values.enumerated())
         return Chart(points, id: \.offset) { point in
             let x = LiveChartGeometry.normalizedSlot(
@@ -75,6 +81,20 @@ struct TemperatureMenuBarContentView: View {
         .chartXAxis(.hidden)
         .chartYAxis(.hidden)
         .frame(height: 38)
+        .overlay {
+            if values.count > 1 {
+                MenuChartHoverOverlay(
+                    series: [
+                        MenuChartSeries(
+                            name: t("CPU die"), color: ThermalStyle.cpu, values: values,
+                            format: { "\(Int($0.rounded()))°C" })
+                    ],
+                    dates: samples.map(\.date), sampleCapacity: capacity,
+                    scale: .domain(20...sparklineTop),
+                    // Both axes are hidden, so this chart plots edge to edge.
+                    plotRect: { CGRect(origin: .zero, size: $0) })
+            }
+        }
         .opacity(points.count > 1 ? 1 : 0)
     }
 

@@ -119,8 +119,9 @@ final class SamplerModel: ObservableObject {
     /// off. Touched only on the main thread; reused `cpuSmoothingTicks` as the window.
     private var recentGPUSamples: [GPUSample] = []
     /// Longer ring of GPU utilization (0–100) for the panel's usage-history
-    /// sparkline (~last minute). Main thread only; emptied when GPU is off.
-    private var gpuHistoryRing: [Double] = []
+    /// sparkline (~last minute), timestamped so the panel's hover read-out can
+    /// date the sample it quotes. Main thread only; emptied when GPU is off.
+    private var gpuHistoryRing: [(date: Date, utilization: Double)] = []
     static let gpuHistoryCapacity = 60
 
     /// The per-process scan cadence — the FINEST of the UI table interval and (when
@@ -1158,7 +1159,7 @@ final class SamplerModel: ObservableObject {
                     self.recentGPUSamples.removeFirst(
                         self.recentGPUSamples.count - self.cpuSmoothingTicks)
                 }
-                self.gpuHistoryRing.append(gpu.utilization)
+                self.gpuHistoryRing.append((system.timestamp, gpu.utilization))
                 if self.gpuHistoryRing.count > Self.gpuHistoryCapacity {
                     self.gpuHistoryRing.removeFirst(
                         self.gpuHistoryRing.count - Self.gpuHistoryCapacity)
@@ -1515,7 +1516,11 @@ final class SamplerModel: ObservableObject {
     var latestGPU: GPUSample? { recentGPUSamples.last }
 
     /// GPU utilization (0–100) history for the panel's usage-history sparkline.
-    var gpuUtilizationHistory: [Double] { gpuHistoryRing }
+    var gpuUtilizationHistory: [Double] { gpuHistoryRing.map(\.utilization) }
+
+    /// Timestamps parallel to `gpuUtilizationHistory`, for the sparkline's
+    /// hover read-out.
+    var gpuUtilizationTimestamps: [Date] { gpuHistoryRing.map(\.date) }
 
     /// GPU utilization (0–100) smoothed over the ~5 s window, so the menubar icon
     /// figure settles rather than jumping each tick. nil when GPU is off.
@@ -1906,6 +1911,13 @@ final class SamplerModel: ObservableObject {
     func topByCPU(limit: Int = 10) -> [ProcessSample] {
         guard let latest else { return [] }
         return Ranking.topByCPU(latest.processes, limit: limit)
+    }
+
+    /// Timestamps for the trails below, so a hovered sample can be dated. All of
+    /// them are read off the same system history, so one list of times lines up
+    /// with any of them.
+    func systemTrailDates() -> [Date] {
+        systemHistory.elements().map(\.timestamp)
     }
 
     /// The recent total-CPU trail (0...100 percentages), for the menubar/dashboard

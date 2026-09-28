@@ -57,4 +57,24 @@ public enum LiveChartGeometry {
         let slot = resolvedCapacity - count + index + 1
         return Double(slot) / Double(resolvedCapacity)
     }
+
+    /// Which sample a position along the plot points at: the inverse of
+    /// `normalizedSlot`, for reading a value-only ring back under a pointer.
+    ///
+    /// Nil where there is no sample to name: while the ring is still filling it
+    /// leaves an empty track to the left of its oldest sample, and pointing at
+    /// that track means pointing at nothing. Everywhere the trace runs, the
+    /// nearest sample wins, including the half-slot at either end of it.
+    public static func slotIndex(
+        atFraction fraction: Double, count: Int, capacity: Int
+    ) -> Int? {
+        guard count > 0, capacity > 0 else { return nil }
+        let resolvedCapacity = max(capacity, count)
+        let clamped = min(max(fraction, 0), 1)
+        let traceStart = Double(resolvedCapacity - count) / Double(resolvedCapacity)
+        guard clamped >= traceStart else { return nil }
+        let slot = Int((clamped * Double(resolvedCapacity)).rounded())
+        let index = slot - (resolvedCapacity - count) - 1
+        return min(max(index, 0), count - 1)
+    }
 }

@@ -77,8 +77,10 @@ struct MenuBarContentView: View {
 
             MenuTrendChart(
                 values: model.systemHistory.elements().map(\.pressurePercent),
+                dates: model.systemTrailDates(),
                 sampleCapacity: model.systemHistory.capacity, color: level.color,
-                domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" }
+                domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
+                readoutName: t("Memory pressure"), readoutValue: { "\(Int($0.rounded()))%" }
             )
             .frame(height: MenuChart.height)
 

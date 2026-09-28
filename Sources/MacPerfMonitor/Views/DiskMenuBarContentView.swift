@@ -19,7 +19,8 @@ struct DiskMenuBarContentView: View {
             header
             DiskReadWriteChart(
                 read: model.diskReadTrail(), write: model.diskWriteTrail(),
-                sampleCapacity: model.systemHistory.capacity
+                sampleCapacity: model.systemHistory.capacity,
+                dates: model.systemTrailDates()
             )
             .frame(height: MenuChart.networkHeight)
             if let disk = model.latestDisk { activitySummary(disk) }
@@ -173,14 +174,40 @@ private struct DiskReadWriteChart: View {
     let read: [Double]
     let write: [Double]
     var sampleCapacity: Int? = nil
+    /// Timestamps parallel to both trails, for the hover read-out's time line.
+    var dates: [Date] = []
+
+    /// The scale both directions share, stated here as well as in the drawing
+    /// so the hover marker lands on the trace rather than beside it.
+    private var upper: Double {
+        max(read.max() ?? 0, write.max() ?? 0, 1) * 1.2
+    }
 
     var body: some View {
+        canvas
+            .overlay(
+                MenuChartHoverOverlay(
+                    series: [
+                        MenuChartSeries(
+                            name: t("Read"), color: DiskStyle.read, values: read,
+                            format: { ByteFormat.rate(max($0, 0)) }),
+                        MenuChartSeries(
+                            name: t("Write"), color: DiskStyle.write, values: write,
+                            format: { ByteFormat.rate(max($0, 0)) }),
+                    ],
+                    dates: dates, sampleCapacity: sampleCapacity,
+                    scale: .mirrored(upper: upper),
+                    plotRect: { MenuChart.plotRect(in: $0, reserveGutter: false) })
+            )
+    }
+
+    private var canvas: some View {
         Canvas { context, size in
             let plot = MenuChart.plotRect(in: size, reserveGutter: false)
             let mid = plot.midY
             let halfHeight = plot.height / 2
             let peak = max(read.max() ?? 0, write.max() ?? 0, 1)
-            let upper = peak * 1.2
+            let upper = self.upper
 
             var centre = Path()
             centre.move(to: CGPoint(x: plot.minX, y: mid))

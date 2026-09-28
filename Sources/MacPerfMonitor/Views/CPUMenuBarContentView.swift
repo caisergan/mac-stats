@@ -80,9 +80,11 @@ struct CPUMenuBarContentView: View {
             }
 
             MenuTrendChart(
-                values: model.cpuLoadTrail(), sampleCapacity: model.systemHistory.capacity,
+                values: model.cpuLoadTrail(), dates: model.systemTrailDates(),
+                sampleCapacity: model.systemHistory.capacity,
                 color: level.color,
-                domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" }
+                domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
+                readoutName: t("CPU"), readoutValue: { "\(Int($0.rounded()))%" }
             )
             .frame(height: MenuChart.height)
 

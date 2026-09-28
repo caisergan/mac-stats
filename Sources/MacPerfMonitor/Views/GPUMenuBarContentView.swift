@@ -69,7 +69,8 @@ struct GPUMenuBarContentView: View {
     }
 
     private var sparkline: some View {
-        let points = Array(model.gpuUtilizationHistory.enumerated())
+        let values = model.gpuUtilizationHistory
+        let points = Array(values.enumerated())
         let capacity = SamplerModel.gpuHistoryCapacity
         return Chart(points, id: \.offset) { point in
             let x = LiveChartGeometry.normalizedSlot(
@@ -85,6 +86,20 @@ struct GPUMenuBarContentView: View {
         .chartXAxis(.hidden)
         .chartYAxis(.hidden)
         .frame(height: 38)
+        .overlay {
+            if values.count > 1 {
+                MenuChartHoverOverlay(
+                    series: [
+                        MenuChartSeries(
+                            name: t("GPU"), color: .accentColor, values: values,
+                            format: { "\(Int($0.rounded()))%" })
+                    ],
+                    dates: model.gpuUtilizationTimestamps, sampleCapacity: capacity,
+                    scale: .domain(0...100),
+                    // Both axes are hidden, so this chart plots edge to edge.
+                    plotRect: { CGRect(origin: .zero, size: $0) })
+            }
+        }
         .opacity(points.count > 1 ? 1 : 0)
     }
 

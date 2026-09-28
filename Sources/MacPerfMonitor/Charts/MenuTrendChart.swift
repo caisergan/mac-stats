@@ -90,6 +90,9 @@ enum MenuChart {
 /// domain; power passes a rounded auto-peak via `MenuChart.niceUpperBound`.
 struct MenuTrendChart: View {
     var values: [Double]
+    /// Timestamps parallel to `values`, so the hover read-out can date the
+    /// sample it quotes. Empty leaves the time line off the card.
+    var dates: [Date] = []
     /// Number of equally spaced samples in the live window. While the buffer is
     /// filling and after it wraps, each new value moves the trace one fixed slot.
     var sampleCapacity: Int? = nil
@@ -100,8 +103,26 @@ struct MenuTrendChart: View {
     var ticks: [Double]
     /// Formats a tick value for its axis label, e.g. `{ "\(Int($0))" }`.
     var label: (Double) -> String
+    /// What the hover read-out calls this series, already localised.
+    var readoutName: String
+    /// How the hover read-out prints a value. The axis labels are cramped enough
+    /// to drop the unit; the card has room to say it, so it formats separately.
+    var readoutValue: (Double) -> String
 
     var body: some View {
+        canvas
+            .overlay(
+                MenuChartHoverOverlay(
+                    series: [
+                        MenuChartSeries(
+                            name: readoutName, color: color, values: values,
+                            format: readoutValue)
+                    ],
+                    dates: dates, sampleCapacity: sampleCapacity, scale: .domain(domain))
+            )
+    }
+
+    private var canvas: some View {
         Canvas { ctx, size in
             let plot = MenuChart.plotRect(in: size)
             let lower = domain.lowerBound

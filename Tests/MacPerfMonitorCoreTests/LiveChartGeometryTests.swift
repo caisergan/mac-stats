@@ -36,6 +36,33 @@ final class LiveChartGeometryTests: XCTestCase {
         XCTAssertEqual(beforeWrap - afterWrap, 1.0 / 900.0, accuracy: 1e-12)
     }
 
+    func testSlotIndexNamesTheSampleEverySlotWasDrawnAt() {
+        // What a hovered menu bar panel chart does: take the position a sample
+        // was drawn at and read the sample back out of it.
+        for (count, capacity) in [(1, 60), (37, 60), (60, 60), (100, 900), (900, 900)] {
+            for index in 0..<count {
+                let fraction = LiveChartGeometry.normalizedSlot(
+                    index: index, count: count, capacity: capacity)
+                XCTAssertEqual(
+                    LiveChartGeometry.slotIndex(
+                        atFraction: fraction, count: count, capacity: capacity),
+                    index, "count \(count) capacity \(capacity) index \(index)")
+            }
+        }
+    }
+
+    func testSlotIndexReadsNoSampleOffTheTrackAFillingRingLeavesEmpty() {
+        // 100 of 900 slots used: the trace only starts eight ninths of the way
+        // across, and the empty track before it names no sample.
+        XCTAssertNil(LiveChartGeometry.slotIndex(atFraction: 0, count: 100, capacity: 900))
+        XCTAssertNil(LiveChartGeometry.slotIndex(atFraction: 0.5, count: 100, capacity: 900))
+        XCTAssertEqual(LiveChartGeometry.slotIndex(atFraction: 1, count: 100, capacity: 900), 99)
+        // A full ring covers the whole plot, so both ends name a sample.
+        XCTAssertEqual(LiveChartGeometry.slotIndex(atFraction: 0, count: 900, capacity: 900), 0)
+        XCTAssertEqual(LiveChartGeometry.slotIndex(atFraction: 1, count: 900, capacity: 900), 899)
+        XCTAssertNil(LiveChartGeometry.slotIndex(atFraction: 0.5, count: 0, capacity: 900))
+    }
+
     func testNiceCeilingSnapsUpToTheLadder() {
         XCTAssertEqual(LiveChartGeometry.niceCeiling(0), 1)
         XCTAssertEqual(LiveChartGeometry.niceCeiling(-5), 1)

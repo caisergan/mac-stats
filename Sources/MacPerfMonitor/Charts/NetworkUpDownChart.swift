@@ -12,8 +12,34 @@ struct NetworkUpDownChart: View {
     let download: [Double]
     let upload: [Double]
     var sampleCapacity: Int? = nil
+    /// Timestamps parallel to both trails, for the hover read-out's time line.
+    var dates: [Date] = []
+
+    /// The scale both directions share, stated here as well as in the drawing
+    /// so the hover marker lands on the trace rather than beside it.
+    private var upper: Double {
+        max(download.max() ?? 0, upload.max() ?? 0, 1) * 1.2
+    }
 
     var body: some View {
+        canvas
+            .overlay(
+                MenuChartHoverOverlay(
+                    series: [
+                        MenuChartSeries(
+                            name: t("Download"), color: NetworkStyle.download,
+                            values: download, format: { ByteFormat.rate(max($0, 0)) }),
+                        MenuChartSeries(
+                            name: t("Upload"), color: NetworkStyle.upload,
+                            values: upload, format: { ByteFormat.rate(max($0, 0)) }),
+                    ],
+                    dates: dates, sampleCapacity: sampleCapacity,
+                    scale: .mirrored(upper: upper),
+                    plotRect: { MenuChart.plotRect(in: $0, reserveGutter: false) })
+            )
+    }
+
+    private var canvas: some View {
         Canvas { ctx, size in
             // No gutter: the throughput labels are too wide for one, so the shared
             // peak is captioned at the top-left instead.
@@ -24,7 +50,7 @@ struct NetworkUpDownChart: View {
             // Scale tight to the visible peak (a little headroom so it doesn't clip),
             // not the coarse 1–2–5 rounding: the trace then fills the height and the
             // axis adapts as throughput changes, instead of low traffic reading flat.
-            let upper = peak * 1.2
+            let upper = self.upper
 
             // Centre line + peak caption — the marked axis for both directions.
             var centre = Path()

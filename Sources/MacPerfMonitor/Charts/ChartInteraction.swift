@@ -102,19 +102,23 @@ extension TrendPoint {
 /// wall-clock time above one row per value. Shared so every hoverable chart
 /// (Swift Charts or `TrendChart`) tells the reading the same way.
 struct ChartScrubCard<Content: View>: View {
-    let date: Date
+    /// When the sample was taken. Nil where the samples carry no time of their
+    /// own, which leaves the line off rather than dating a reading wrongly.
+    let date: Date?
     @ViewBuilder var content: () -> Content
 
-    init(date: Date, @ViewBuilder content: @escaping () -> Content) {
+    init(date: Date?, @ViewBuilder content: @escaping () -> Content) {
         self.date = date
         self.content = content
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(date, format: .dateTime.hour().minute().second())
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            if let date {
+                Text(date, format: .dateTime.hour().minute().second())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             content()
         }
         .padding(.horizontal, 9)

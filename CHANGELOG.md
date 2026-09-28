@@ -28,6 +28,12 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Changed
 
+- Every chart in the menu bar panel answers the pointer too. Hover the
+  processor, memory-pressure, GPU, charge, power, temperature, network or disk
+  graph and a marker pins to the sample under the pointer, with a card giving
+  its wall-clock time and the reading. The two mirrored charts (download and
+  upload, read and write) name both directions and quote each one's value,
+  since a marker on a two-line chart cannot say which line it sits on.
 - Every timeline on the Dashboard and the Disk tab answers the pointer. Hover
   the memory-pressure, processor, network, swap or physical-disk chart, or the
   Disk tab's throughput, operations, service-time and free-space charts, and a

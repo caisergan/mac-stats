@@ -1137,14 +1137,14 @@ enum StatsMenuBarWidgets {
     /// * Below 20% is red. That is the charge at which macOS itself starts
     ///   warning, and a flat battery is worth a colour even on a bar the user
     ///   asked to keep plain.
-    /// * Low Power Mode is orange, whatever the charge.
+    /// * Low Power Mode is yellow, whatever the charge, as it is in Stats.
     ///
     /// A full battery is the bar's own colour even when coloured: 100% needs no
     /// verdict, and Stats does the same.
     nonisolated static func batteryColor(
         _ charge: Double, isDark: Bool, isLowPowerMode: Bool, colored: Bool
     ) -> NSColor {
-        if isLowPowerMode { return .systemOrange }
+        if isLowPowerMode { return .systemYellow }
         switch charge {
         case 0.2...0.4:
             return colored ? .systemOrange : textColor(isDark)
