@@ -41,6 +41,8 @@ final class SamplerModel: ObservableObject {
     /// Alert conditions that remain active after their notification edge fires.
     /// The combined menu bar uses this for its red alarm state.
     @Published private(set) var activeAlertKinds: Set<Alert.Kind> = []
+    @Published private(set) var activeAlerts: [Alert] = []
+    @Published private(set) var alertObservations: [AlertIncident] = []
 
     /// Identities the user force-quit through MacPerfMonitor within the retention
     /// window, so the process list can keep showing them greyed out as clear
@@ -133,6 +135,25 @@ final class SamplerModel: ObservableObject {
     /// 2–4 Hz. This prevents a popover from bypassing the process-scan floor.
     private var popoverEveryTicks = 1
     private var popoverTickCounter = 0
+    /// The scan cadence to use when a per-process alert is the only thing that
+    /// wants one: with nothing recording and nothing on screen, a leak or
+    /// ceiling alert within the minute is soon enough, and the scan is the
+    /// expensive part of a tick.
+    static let alertOnlyScanInterval: TimeInterval = 60
+    private var alertScanEveryTicks = 60
+    private var alertScanTickCounter = 0
+    /// Whether a menu bar item is currently installed. Set by the app delegate
+    /// from the components switch. Together with the window and popover
+    /// consumers it answers "is anything reading what we publish", which is
+    /// what lets an app with no surfaces skip the per-tick hop to the main
+    /// thread entirely.
+    private var menuBarItemVisible = true
+    /// Whether a main window is open, covered or not. Separate from the process
+    /// consumers, which are dropped a few seconds after the window is covered:
+    /// the heavy scan should stop then, but the cheap per-tick history must keep
+    /// filling, or the chart the window shows on its return has a hole in it for
+    /// however long it was hidden.
+    private var windowOpen = false
     /// The visible-surface cadence: `liveTick` (charts, the menu-bar image)
     /// and the on-screen row re-reads follow the refresh dial, while the 1 Hz
     /// system heartbeat keeps running underneath for logging and smoothing.
@@ -320,7 +341,12 @@ final class SamplerModel: ObservableObject {
     private var ticksSinceRetention = 0
     private var retentionEveryTicks: Int
     /// Coarse WAL-checkpoint cadence (heavy ticks). Auto-checkpoint is disabled so
-    /// the per-tick commit never fsyncs; this resets the WAL every ~15 s instead.
+    /// the per-tick commit never fsyncs; this resets the WAL every ~60 s instead,
+    /// with the retention pass. A checkpoint copies each page the WAL touched
+    /// once, and at 1 s logging the same index leaves are rewritten every
+    /// second, so a minute between checkpoints writes ~45% fewer bytes to the
+    /// main file than 15 s did (measured on a 3 GB production database: 24.6 to
+    /// 13.3 MB per minute) for a WAL that peaks near 55 MB at 1 s logging.
     private var ticksSinceCheckpoint = 0
     private var checkpointEveryTicks: Int
     /// When the system row + process rows were last written to the DB. The table
@@ -447,6 +473,7 @@ final class SamplerModel: ObservableObject {
         [:]
     private var cachedRecentSystemHistory: [Int: (at: Date, points: [SystemHistoryPoint])] = [:]
     private let systemHistoryMaxAge: TimeInterval = 2.5
+    private var systemHistorySweepScheduled = false
 
     /// Pressure events change on minute timescales (they are derived from
     /// level *steps* in the 2 h window), so a short TTL absorbs the per-tick
@@ -465,11 +492,21 @@ final class SamplerModel: ObservableObject {
     private var cachedLeakSeries: (boardAt: Date, series: [ProcessIdentity: [ProcessHistoryPoint]])?
     private var cachedConsumerSeries:
         (at: Date, identities: [ProcessIdentity], series: [ProcessIdentity: [(Date, UInt64)]])?
+    private var cachedDisplayCaptureSeries:
+        (at: Date, identities: [ProcessIdentity], series: [ProcessIdentity: [ProcessHistoryPoint]])?
 
-    /// The alert decision engine and its inputs, all confined to `queue`. The
-    /// config is pushed in from settings via `setAlertConfig(_:)`; the leaking
-    /// set is refreshed from the leak board on the retention cadence.
+    /// The alert engine and checkpoints are confined to `queue`. Live growth
+    /// evidence is independent of the historical leak board and recording mode.
     private let alertEngine = AlertEngine()
+    private let incidentStore: AlertIncidentStore? =
+        Bundle.main.bundleURL.pathExtension == "app"
+        ? AlertIncidentStore(
+            url: MacPerfMonitorDatabase.defaultURL().deletingLastPathComponent()
+                .appendingPathComponent("alerts/incidents.json")) : nil
+    private var restoredIncidents = false
+    private var lastIncidentSave = Date.distantPast
+    private var savedIncidentRevision: UInt64 = 0
+    private var lastAlertEvaluation = Date.distantPast
     private var alertConfig = AlertConfig.default
     private var leakingIDs: Set<ProcessIdentity> = []
     private var pressureMonitor: MemoryPressureMonitor?
@@ -480,7 +517,7 @@ final class SamplerModel: ObservableObject {
 
     init(
         interval: TimeInterval? = nil, historyCapacity: Int = 900, store: SampleStore? = nil,
-        persistenceEnabled: Bool = AppModeManager.loggingEnabledFromDefaults()
+        persistenceEnabled: Bool = AppComponentsManager.loggingEnabledFromDefaults()
     ) {
         let tableInterval = Self.configuredTableInterval()
         let baseInterval = interval ?? LiveRefreshCadence.baseInterval(for: tableInterval)
@@ -504,6 +541,8 @@ final class SamplerModel: ObservableObject {
         // heavy ticks, so they key off this same scan cadence.
         let processInterval = LiveRefreshCadence.processInterval(for: tableInterval)
         let scan = persistenceEnabled ? min(processInterval, highRes) : processInterval
+        self.alertScanEveryTicks = LiveRefreshCadence.tickCount(
+            for: Self.alertOnlyScanInterval, baseInterval: baseInterval)
         self.heavyEveryTicks = LiveRefreshCadence.tickCount(
             for: scan, baseInterval: baseInterval)
         self.tableEveryTicks = LiveRefreshCadence.tickCount(
@@ -513,7 +552,7 @@ final class SamplerModel: ObservableObject {
         self.uiEveryTicks = LiveRefreshCadence.tickCount(
             for: tableInterval, baseInterval: baseInterval)
         self.retentionEveryTicks = max(1, Int((60.0 / scan).rounded()))
-        self.checkpointEveryTicks = max(1, Int((15.0 / scan).rounded()))
+        self.checkpointEveryTicks = max(1, Int((60.0 / scan).rounded()))
         self.persistMinInterval = max(1.0, highRes)
         // Smooth the menubar/core-grid total CPU over ~5 s (fast-tick samples).
         self.cpuSmoothingTicks = LiveRefreshCadence.tickCount(
@@ -541,6 +580,18 @@ final class SamplerModel: ObservableObject {
     func start() {
         queue.async { [weak self] in
             guard let self, self.timer == nil else { return }
+            if !self.restoredIncidents {
+                self.restoredIncidents = true
+                do {
+                    if let snapshot = try self.incidentStore?.load() {
+                        self.alertEngine.restore(snapshot)
+                    }
+                } catch {
+                    AppLog.alerts.error(
+                        "could not restore alert state: \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
             // macOS 26/27 App Nap is more aggressive than what Stats targets: a plain
             // GCD timer on a `.default`/`.utility` queue gets coalesced out to ~5 s
             // and freezes the menu bar. Keeping the fast heartbeat reliable takes
@@ -583,6 +634,7 @@ final class SamplerModel: ObservableObject {
 
     func stop() {
         queue.async { [weak self] in
+            self?.sampler.stopANEPowerSampling()
             self?.timer?.cancel()
             self?.timer = nil
             self?.pressureMonitor?.stop()
@@ -617,10 +669,41 @@ final class SamplerModel: ObservableObject {
         }
     }
 
+    /// Whether any popover that consumes the process scan is open. Read on the
+    /// sampler queue.
+    private var popoverOpenForUI: Bool {
+        popoverKindConsumers.contains { $0.value > 0 }
+    }
+
     /// Push the latest alert preferences onto the sampler queue, where the
     /// engine reads them. Called from settings whenever the config changes.
     func setAlertConfig(_ config: AlertConfig) {
-        queue.async { self.alertConfig = config }
+        queue.async {
+            self.alertConfig = config
+            self.updateANEPowerDemand()
+            if !config.anyEnabled {
+                self.alertEngine.reset()
+                self.incidentStore?.save(self.alertEngine.incidentSnapshot)
+                self.savedIncidentRevision = 0
+                DispatchQueue.main.async {
+                    if !self.activeAlerts.isEmpty { self.activeAlerts = [] }
+                    if !self.activeAlertKinds.isEmpty { self.activeAlertKinds = [] }
+                    if !self.alertObservations.isEmpty { self.alertObservations = [] }
+                }
+            }
+        }
+    }
+
+    /// Tell the sampler whether a menu bar item is on screen reading its
+    /// published values. See `menuBarItemVisible`.
+    func setMenuBarItemVisible(_ visible: Bool) {
+        queue.async { self.menuBarItemVisible = visible }
+    }
+
+    /// Tell the sampler whether a main window exists, covered or not. See
+    /// `windowOpen`.
+    func setWindowOpen(_ open: Bool) {
+        queue.async { self.windowOpen = open }
     }
 
     /// Install (or clear) the privileged helper-backed reader on the sampler.
@@ -760,7 +843,14 @@ final class SamplerModel: ObservableObject {
     func setTableInterval(_ seconds: Double) {
         let s = Self.tableIntervalChoices.contains(seconds) ? seconds : Self.defaultTableInterval
         queue.async { [weak self] in
-            guard let self else { return }
+            // Only act on a real change. This is called from a
+            // `UserDefaults.didChangeNotification` sink, which fires for every
+            // defaults write in the process, including the window frame AppKit
+            // stores when a window opens or moves. Recomputing the cadence
+            // resets the tick counters, so without this guard opening the window
+            // wiped the "publish now" state `addProcessConsumer` had just set,
+            // and the process table sat empty for a full table interval.
+            guard let self, s != self.tableIntervalSeconds else { return }
             self.tableIntervalSeconds = s
             let baseInterval = LiveRefreshCadence.baseInterval(for: s)
             let intervalChanged = baseInterval != self.interval
@@ -779,7 +869,9 @@ final class SamplerModel: ObservableObject {
         let s =
             Self.highResIntervalChoices.contains(seconds) ? seconds : Self.defaultHighResInterval
         queue.async { [weak self] in
-            guard let self else { return }
+            // Same guard as `setTableInterval`: an unrelated defaults write must
+            // not reset the cadence counters.
+            guard let self, s != self.highResIntervalSeconds else { return }
             self.highResIntervalSeconds = s
             self.recomputeScanCadence()
         }
@@ -795,6 +887,8 @@ final class SamplerModel: ObservableObject {
             persistenceEnabled
             ? min(processInterval, highResIntervalSeconds) : processInterval
         heavyEveryTicks = LiveRefreshCadence.tickCount(for: scan, baseInterval: interval)
+        alertScanEveryTicks = LiveRefreshCadence.tickCount(
+            for: Self.alertOnlyScanInterval, baseInterval: interval)
         // Broad process UI publication (the re-sort, `latest`, alerts) follows
         // the dial with a 5 s floor; the rows on screen are re-read at the dial
         // rate in between (`refreshProcesses`), and the system-only heartbeat
@@ -812,13 +906,17 @@ final class SamplerModel: ObservableObject {
         // retention/checkpoint count persist() calls (one per scan-due tick), so
         // they key off the scan cadence.
         retentionEveryTicks = max(1, Int((60.0 / scan).rounded()))
-        checkpointEveryTicks = max(1, Int((15.0 / scan).rounded()))
+        checkpointEveryTicks = max(1, Int((60.0 / scan).rounded()))
         cpuSmoothingTicks = LiveRefreshCadence.tickCount(for: 5, baseInterval: interval)
         processSmoothingPoints = max(2, Int((5.0 / scan).rounded()))
         persistMinInterval = max(1.0, highResIntervalSeconds)
-        heavyTickCounter = 0
-        tableTickCounter = 0
-        popoverTickCounter = 0
+        // Restart the rhythm, but never cancel a counter that is already due:
+        // a surface that has just registered forces its counters past the
+        // threshold precisely so the next tick serves it, and a dial change
+        // arriving in between must not swallow that.
+        heavyTickCounter = heavyTickCounter >= heavyEveryTicks ? heavyEveryTicks : 0
+        tableTickCounter = tableTickCounter >= tableEveryTicks ? tableEveryTicks : 0
+        popoverTickCounter = popoverTickCounter >= popoverEveryTicks ? popoverEveryTicks : 0
     }
 
     /// Schedule or reschedule the single sampler timer at the selected base rate.
@@ -842,6 +940,7 @@ final class SamplerModel: ObservableObject {
         queue.async { [weak self] in
             guard let self, enabled != self.persistenceEnabled else { return }
             self.persistenceEnabled = enabled
+            self.updateANEPowerDemand()
             self.persistenceGeneration &+= 1
             if enabled {
                 if self.store == nil {
@@ -876,7 +975,11 @@ final class SamplerModel: ObservableObject {
     /// installs / removes itself, so the IOAccelerator registry is read only while
     /// the GPU read-out is actually shown — nothing otherwise.
     func setGPUSamplingEnabled(_ enabled: Bool) {
-        queue.async { [weak self] in self?.gpuSamplingEnabled = enabled }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.gpuSamplingEnabled = enabled
+            self.updateANEPowerDemand()
+        }
     }
 
     /// Surfaces that show GPU detail (the GPU tab, an open GPU dropdown)
@@ -892,7 +995,16 @@ final class SamplerModel: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             self.gpuConsumers = max(0, self.gpuConsumers - 1)
+            self.updateANEPowerDemand()
         }
+    }
+
+    private var wantsGPUSampling: Bool {
+        gpuSamplingEnabled || gpuConsumers > 0 || persistenceEnabled || alertConfig.highGPUEnabled
+    }
+
+    private func updateANEPowerDemand() {
+        if !wantsGPUSampling { sampler.stopANEPowerSampling() }
     }
 
     /// Register a live consumer of per-process data (an open menu-bar popover that
@@ -992,8 +1104,14 @@ final class SamplerModel: ObservableObject {
         // A GPU panel on screen (the GPU tab, an open GPU dropdown) reads the
         // device every tick so it moves at the dial; the icon alone and the
         // history make do with one read a second.
+        // The first tick after launch has nothing to difference against, so
+        // its CPU, network and disk figures are zero by construction. It still
+        // seeds the sampler and drives the first scan, but it is neither
+        // recorded nor charted: a recorded zero starts every run after a gap
+        // with a vertical climb from the axis.
+        let hasBaseline = sampler.hasBaseline
         let (system, cpu, battery, network, disk, gpu) = sampler.tickSystem(
-            readGPU: gpuSamplingEnabled || gpuConsumers > 0 || persistenceEnabled,
+            readGPU: wantsGPUSampling,
             gpuReadInterval: gpuConsumers > 0 ? 0 : 1)
         lastSystemTick = (system, cpu, battery, network, disk, gpu)
         diagnostics.recordSystemTick(duration: TickDiagnostics.now() - tickStart)
@@ -1022,7 +1140,23 @@ final class SamplerModel: ObservableObject {
         } else {
             popoverTickCounter = 0
         }
-        let needProcesses = persistenceEnabled || processConsumers > 0 || popoverOpen
+        // Alerts are a consumer of the scan in their own right. Without this,
+        // with logging off and nothing on screen, no alert is ever evaluated:
+        // evaluation lives inside the scan, and the scan had no reason to run.
+        // Only the per-process alerts need the scan; the rest are evaluated
+        // below from the cheap tick.
+        let processAlerts = alertConfig.processCeilingEnabled || alertConfig.leakEnabled
+        let interactive = processConsumers > 0 || popoverOpen
+        let needProcesses =
+            persistenceEnabled || interactive || processAlerts
+        // When alerts are the *only* reason to scan, do it on a slow cadence:
+        // the scan is the expensive part of a tick, and a leak or ceiling alert
+        // that arrives within the minute is soon enough. Recording or anything
+        // on screen goes back to the usual cadences.
+        alertScanTickCounter += 1
+        let alertsAreTheOnlyReason =
+            !persistenceEnabled && !interactive && processAlerts
+        let alertScanDue = alertScanTickCounter >= alertScanEveryTicks
         // Two cadences: the fine SCAN (feeds persistence + trails + popover) runs at
         // `heavyEveryTicks`; the main-window UI publish/alerts run at the coarser
         // `tableEveryTicks` (the global Refresh dial), so 1 s logging never forces
@@ -1034,13 +1168,20 @@ final class SamplerModel: ObservableObject {
         // Refresh dial (the table re-sorted on every event) and piled
         // main-thread work onto a Mac that is already struggling.
         let force = forceHeavy || forceHeavyPending
-        let scanDue = force || !hasProcessSnapshot || heavyTickCounter >= heavyEveryTicks
+        let scanDue =
+            force || !hasProcessSnapshot || heavyTickCounter >= heavyEveryTicks
         let tableDue = !hasProcessSnapshot || tableTickCounter >= tableEveryTicks
-        let alertsDue = force || tableDue
+        let alertsDue =
+            force
+            || (alertConfig.anyEnabled
+                && system.timestamp.timeIntervalSince(lastAlertEvaluation) >= 2)
         let popoverDue =
             popoverOpen
             && (force || !hasProcessSnapshot || popoverTickCounter >= popoverEveryTicks)
-        let runScan = needProcesses && (popoverDue || scanDue || tableDue)
+        let runScan =
+            needProcesses && (popoverDue || scanDue || tableDue || (processAlerts && alertScanDue))
+            && (!alertsAreTheOnlyReason || alertScanDue)
+        if runScan { alertScanTickCounter = 0 }
         // The dial gate for everything visible. An open popover pins it to
         // every tick (its live strips are the point of opening one), and an
         // immediate-tick request publishes once without waiting out the dial.
@@ -1053,38 +1194,58 @@ final class SamplerModel: ObservableObject {
         }
 
         // Publish the fresh system sample every tick, independent of any scan:
-        // the full-rate heartbeat the menu bar and the live charts read.
+        // the full-rate heartbeat the menu bar and the live charts read. Skip
+        // the hop to the main thread only when there is genuinely nobody: no
+        // menu bar item, no popover, and no window at all. A window that is
+        // merely covered still counts, because it will show this history the
+        // moment it is uncovered, and a hole in that line would read as "we
+        // stopped measuring" rather than "you were in another app".
         let diagnostics = self.diagnostics
-        DispatchQueue.main.async {
-            let publishStart = TickDiagnostics.now()
-            self.systemHistory.append(system)
-            self.appendRecentCPU(cpu)
-            self.appendRecentNetwork(network)
-            self.appendRecentDisk(disk)
-            self.recentBattery = battery
-            // GPU is sampled only while the menubar GPU item is on; smooth it like
-            // CPU so the icon figure settles, and drop the history when it goes off.
-            if let gpu {
-                self.recentGPUSamples.append(gpu)
-                if self.recentGPUSamples.count > self.cpuSmoothingTicks {
-                    self.recentGPUSamples.removeFirst(
-                        self.recentGPUSamples.count - self.cpuSmoothingTicks)
+        let anythingWatching = menuBarItemVisible || interactive || windowOpen
+        if anythingWatching {
+            DispatchQueue.main.async {
+                let publishStart = TickDiagnostics.now()
+                // The delta-based rings skip the baseline tick (see above);
+                // battery and GPU are read directly and are fine to show.
+                if hasBaseline {
+                    self.systemHistory.append(system)
+                    self.appendRecentCPU(cpu)
+                    self.appendRecentNetwork(network)
+                    self.appendRecentDisk(disk)
                 }
-                self.gpuHistoryRing.append(gpu.utilization)
-                if self.gpuHistoryRing.count > Self.gpuHistoryCapacity {
-                    self.gpuHistoryRing.removeFirst(
-                        self.gpuHistoryRing.count - Self.gpuHistoryCapacity)
+                self.recentBattery = battery
+                // GPU is sampled only while the menubar GPU item is on; smooth it like
+                // CPU so the icon figure settles, and drop the history when it goes off.
+                if let gpu {
+                    self.recentGPUSamples.append(gpu)
+                    if self.recentGPUSamples.count > self.cpuSmoothingTicks {
+                        self.recentGPUSamples.removeFirst(
+                            self.recentGPUSamples.count - self.cpuSmoothingTicks)
+                    }
+                    self.gpuHistoryRing.append(gpu.utilization)
+                    if self.gpuHistoryRing.count > Self.gpuHistoryCapacity {
+                        self.gpuHistoryRing.removeFirst(
+                            self.gpuHistoryRing.count - Self.gpuHistoryCapacity)
+                    }
+                } else if !self.recentGPUSamples.isEmpty {
+                    self.recentGPUSamples = []
+                    self.gpuHistoryRing = []
                 }
-            } else if !self.recentGPUSamples.isEmpty {
-                self.recentGPUSamples = []
-                self.gpuHistoryRing = []
+                // The visible heartbeat. The rings above append on every tick so
+                // charts keep full 1 s resolution, but the redraw signal honours
+                // the refresh dial: at 10 s the menu-bar image and every live
+                // chart advance ten seconds of data at a time.
+                if uiDue { self.liveTick.send() }
+                diagnostics.recordPublish(duration: TickDiagnostics.now() - publishStart)
             }
-            // The visible heartbeat. The rings above append on every tick so
-            // charts keep full 1 s resolution, but the redraw signal honours
-            // the refresh dial: at 10 s the menu-bar image and every live
-            // chart advance ten seconds of data at a time.
-            if uiDue { self.liveTick.send() }
-            diagnostics.recordPublish(duration: TickDiagnostics.now() - publishStart)
+        }
+
+        // System alerts use fresh cheap ticks; process evidence carries its own
+        // timestamp until the scan completes. Neither waits for the display dial.
+        if alertsDue, alertConfig.anyEnabled {
+            evaluateAlerts(
+                system: system, processes: carriedProcesses, cpu: cpu,
+                processesAvailable: hasProcessSnapshot)
         }
 
         // Between table publishes, re-read just the rows on screen so their
@@ -1148,7 +1309,7 @@ final class SamplerModel: ObservableObject {
         // cost. The live charts read the in-memory ring, not the DB, so only
         // the long-range history granularity follows this.
         var persistStore: SampleStore?
-        if scanDue, persistenceEnabled, let store {
+        if scanDue, persistenceEnabled, hasBaseline, let store {
             let now = Date()
             if lastPersistAt.map({ now.timeIntervalSince($0) >= persistMinInterval }) ?? true {
                 lastPersistAt = now
@@ -1174,7 +1335,8 @@ final class SamplerModel: ObservableObject {
                     // bucket must equal retention's standard-res bucket so every
                     // process still has a raw row in every minute bucket.
                     try persistStore.insertChanged(
-                        system, processes: result.processes, bucket: persistBucket)
+                        system, processes: result.processes, bucket: persistBucket, battery: battery
+                    )
                 } catch {
                     AppLog.sampler.error(
                         "sample insert failed: \(String(describing: error), privacy: .public)")
@@ -1209,11 +1371,19 @@ final class SamplerModel: ObservableObject {
             )
         }
         // The row itself was written on the scan queue; the checkpoint and
-        // retention cadences count scan-due ticks here. Alert evaluation
-        // follows the table cadence.
+        // retention cadences count scan-due ticks here. Fresh process evidence
+        // joins the alert evaluation when this scan was requested by alerting.
         if job.scanDue { runPersistenceMaintenance(snapshot) }
-        if job.alertsDue { evaluateAlerts(snapshot) }
-        guard job.uiWantsProcesses else { return }
+        if job.alertsDue {
+            evaluateAlerts(
+                system: snapshot.system, processes: snapshot.processes, cpu: snapshot.cpu)
+        }
+        // Whether anything wants these rows is decided again here, not just when
+        // the scan was dispatched. A window that opened while the scan was
+        // running would otherwise have to wait for the whole next one, which at
+        // launch is the difference between the process table appearing in about
+        // a second and in nearly two.
+        guard job.uiWantsProcesses || processConsumers > 0 || popoverOpenForUI else { return }
 
         // Trails freeze while nothing consumes the scan (full-mode recording
         // keeps running regardless); after a real gap the frozen points would
@@ -1427,6 +1597,16 @@ final class SamplerModel: ObservableObject {
     /// popovers that want a 1 Hz read-out (memory used, pressure) read this. O(1).
     var liveSystem: SystemSample? { systemHistory.last }
 
+    /// The newest CPU sample, exactly as measured, with no smoothing.
+    ///
+    /// `smoothedCPU` is a five second rolling mean, which is what a menu bar
+    /// read-out needs: an unsmoothed percentage jitters too much to read at a
+    /// glance. It is the wrong thing for the per-core bars, where a core that
+    /// pins for half a second and drops back is the movement you are looking
+    /// for, and the mean flattens it to nearly nothing. So the core grids read
+    /// this instead.
+    var liveCPU: CPUSample? { recentCPUSamples.last }
+
     /// The most recent battery sample, refreshed every fast tick (~1 Hz) — the
     /// battery analogue of `liveSystem`/`latestNetwork`, so the battery menubar
     /// read-outs stay live at 1 Hz instead of the slower heavy `latest` cadence.
@@ -1615,21 +1795,60 @@ final class SamplerModel: ObservableObject {
     /// Run the alert engine over the full snapshot (all processes, so the
     /// per-process ceiling sees everything) and forward any newly-fired alerts
     /// to the main-thread sink. Runs on `queue`.
-    private func evaluateAlerts(_ snapshot: Sampler.Snapshot) {
+    private func evaluateAlerts(
+        system: SystemSample, processes: [ProcessSample], cpu: CPUSample,
+        processesAvailable: Bool = true
+    ) {
+        lastAlertEvaluation = max(lastAlertEvaluation, system.timestamp)
         let alerts = alertEngine.evaluate(
-            system: snapshot.system,
-            processes: snapshot.processes,
-            leakingProcesses: leakingIDs,
+            system: system,
+            processes: processes,
             config: alertConfig,
-            cpu: snapshot.cpu,
-            gpu: lastSystemTick?.gpu)
+            cpu: cpu,
+            gpu: lastSystemTick?.gpu,
+            expectedInterval: max(2, interval),
+            processSnapshotAvailable: processesAvailable && !processes.isEmpty)
         let activeKinds = alertEngine.activeKinds
+        let activeAlerts = alertEngine.activeAlerts
+        let observations = alertEngine.observations
+        let snapshot = alertEngine.incidentSnapshot
+        if alertEngine.incidentRevision != savedIncidentRevision || !alerts.isEmpty
+            || (!snapshot.incidents.isEmpty
+                && system.timestamp.timeIntervalSince(lastIncidentSave) >= 30)
+        {
+            savedIncidentRevision = alertEngine.incidentRevision
+            lastIncidentSave = system.timestamp
+            incidentStore?.save(snapshot)
+        }
         let sink = onAlertsFired
         DispatchQueue.main.async { [weak self] in
+            if self?.activeAlerts != activeAlerts {
+                self?.activeAlerts = activeAlerts
+            }
             if self?.activeAlertKinds != activeKinds {
                 self?.activeAlertKinds = activeKinds
             }
+            if self?.alertObservations != observations { self?.alertObservations = observations }
             if !alerts.isEmpty { sink(alerts) }
+        }
+    }
+
+    func recordAlertDelivery(_ ids: [String], outcome: String, attemptedAt: Date) {
+        queue.async {
+            self.incidentStore?.recordDelivery(ids, outcome: outcome)
+            if outcome == "failed" {
+                self.alertEngine.recordDeliveryFailure(ids, attemptedAt: attemptedAt)
+                self.incidentStore?.save(self.alertEngine.incidentSnapshot)
+            }
+        }
+    }
+
+    func snoozeAlert(_ id: String, seconds: TimeInterval = 3600) {
+        queue.async {
+            self.alertEngine.snooze(id, until: Date().addingTimeInterval(seconds))
+            self.incidentStore?.save(self.alertEngine.incidentSnapshot)
+            let alerts = self.alertEngine.activeAlerts
+            DispatchQueue.main.async { self.activeAlerts = alerts }
         }
     }
 
@@ -1689,8 +1908,14 @@ final class SamplerModel: ObservableObject {
     /// `queue`, and the published row highlight on main.
     private func scheduleLeakScan(_ store: SampleStore) {
         let generation = persistenceGeneration
+        let live = Set(carriedProcesses.map(\.id))
+        let config = LeakDetector.Config(
+            maximumGap: max(180, Self.configuredStandardResInterval() * 2))
         leakScanQueue.async { [weak self] in
-            let entries = (try? store.leakBoard()) ?? []
+            guard let entries = try? store.leakBoard(config: config, liveIdentities: live) else {
+                AppLog.alerts.error("leak-board read failed; retaining the last evidence")
+                return
+            }
             guard let self else { return }
             self.queue.async {
                 guard generation == self.persistenceGeneration,
@@ -2011,6 +2236,33 @@ final class SamplerModel: ObservableObject {
     /// page can be measured with a full window rather than an empty one.
     var benchmarkSystemHistory: [SystemHistoryPoint]?
 
+    func loadBatteryHistory(
+        _ window: HistoryWindow, now: Date = Date(),
+        completion: @escaping (Result<[BatteryHistoryPoint], Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.success([]))
+            return
+        }
+        readQueue.async {
+            let result = Result { try store.batteryHistory(window, now: now) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func loadBatteryDailyHistory(
+        for identifier: String, completion: @escaping (Result<[BatteryDailyPoint], Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.success([]))
+            return
+        }
+        readQueue.async {
+            let result = Result { try store.batteryDailyHistory(for: identifier) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     func loadSystemHistory(
         _ window: HistoryWindow,
         downsampledTo maxPoints: Int? = nil,
@@ -2052,7 +2304,34 @@ final class SamplerModel: ObservableObject {
         }
         let points = (try? store.systemHistory(window)) ?? []
         cachedSystemHistory[window] = (Date(), points)
+        scheduleSystemHistorySweep()
         return points
+    }
+
+    /// Drop system-history cache entries once their TTL has passed. A stale
+    /// entry is never served (a read after the TTL reloads), but it used to
+    /// stay resident until the same key was read again, which after the
+    /// window closes is never: around 1.8 MB per range on a busy week-old
+    /// database, held for the life of the app. Runs one TTL after a store, on
+    /// `readQueue`; whatever is still fresh then gets its own later sweep.
+    private func scheduleSystemHistorySweep() {
+        guard !systemHistorySweepScheduled else { return }
+        systemHistorySweepScheduled = true
+        readQueue.asyncAfter(deadline: .now() + systemHistoryMaxAge + 0.5) { [weak self] in
+            guard let self else { return }
+            self.systemHistorySweepScheduled = false
+            let now = Date()
+            let maxAge = self.systemHistoryMaxAge
+            self.cachedSystemHistory = self.cachedSystemHistory.filter {
+                now.timeIntervalSince($0.value.at) < maxAge
+            }
+            self.cachedRecentSystemHistory = self.cachedRecentSystemHistory.filter {
+                now.timeIntervalSince($0.value.at) < maxAge
+            }
+            if !self.cachedSystemHistory.isEmpty || !self.cachedRecentSystemHistory.isEmpty {
+                self.scheduleSystemHistorySweep()
+            }
+        }
     }
 
     /// Load the last two hours of raw system history (the Processes-tab header
@@ -2091,6 +2370,7 @@ final class SamplerModel: ObservableObject {
         }
         let points = (try? store.recentSystemHistory(seconds: seconds)) ?? []
         cachedRecentSystemHistory[key] = (Date(), points)
+        scheduleSystemHistorySweep()
         return points
     }
 
@@ -2107,6 +2387,38 @@ final class SamplerModel: ObservableObject {
         }
         readQueue.async {
             let points = (try? store.processHistory(for: identity, window: window)) ?? []
+            DispatchQueue.main.async { completion(points) }
+        }
+    }
+
+    func loadUsageTimeline(
+        _ identity: ProcessIdentity, window: HistoryWindow, now: Date,
+        completion: @escaping (Result<UsageTimeline.ObservedHistory, Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.failure(CocoaError(.fileReadUnknown)))
+            return
+        }
+        readQueue.async {
+            let result = Result { try store.usageTimeline(for: identity, window: window, now: now) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Load chart history for the selected process and its non-overlapping
+    /// predecessors from the same executable. Each restart boundary is marked
+    /// so callers can leave a visual gap without discarding either endpoint.
+    func loadProcessLineageHistory(
+        _ identity: ProcessIdentity,
+        window: HistoryWindow,
+        completion: @escaping ([ProcessHistoryPoint]) -> Void
+    ) {
+        guard let store else {
+            completion([])
+            return
+        }
+        readQueue.async {
+            let points = (try? store.processLineageHistory(for: identity, window: window)) ?? []
             DispatchQueue.main.async { completion(points) }
         }
     }
@@ -2234,6 +2546,206 @@ final class SamplerModel: ObservableObject {
     }
 
     // MARK: - History tab (M6)
+
+    // MARK: Ask
+
+    /// The newest live readings, for the "right now" line in each brief.
+    private func askLiveReading(now: Date) -> AskLiveReading {
+        var live = AskLiveReading(date: now)
+        let system = liveSystem ?? latest?.system
+        live.cpuPercent = latest.map { $0.cpu.totalUsage * 100 } ?? system.map { $0.cpuLoad * 100 }
+        live.pressurePercent = system?.pressurePercent
+        live.gpuPercent = system?.gpuUtilization
+        live.aneMillisecondsPerSecond = system?.aneTimeMillisecondsPerSecond
+        live.networkInBytesPerSec = system?.networkInBytesPerSec
+        live.networkOutBytesPerSec = system?.networkOutBytesPerSec
+        live.diskBusyPercent = system?.diskUtilizationPercent
+        live.bootFreeBytes = system?.bootVolumeFreeBytes
+        live.bootTotalBytes = system?.bootVolumeTotalBytes
+        live.thermal = system?.thermalPressure
+        live.cpuDieC = system?.cpuDieC
+        live.fanRPM = system?.fanRPM
+        if let battery = latest?.battery, battery.isPresent {
+            live.batteryCharge = battery.chargePercent
+            live.batteryIsCharging = battery.isCharging
+            live.onExternalPower = battery.isOnAC
+        } else if let system, system.batteryPresent {
+            live.batteryCharge = system.batteryCharge
+            live.batteryIsCharging = system.batteryIsCharging
+        }
+        return live
+    }
+
+    /// Area briefs for a period, built on the read queue from recorded history
+    /// and the live readings. Asking for `.overall` returns the overall brief
+    /// first, then the parts that stood out, so an answer can explain them.
+    func askBriefs(
+        areas: [AskArea], interval: DateInterval, appName: String? = nil, now: Date = Date(),
+        includeApps: Bool = true
+    ) async throws -> [AreaBrief] {
+        let current = abs(interval.end.timeIntervalSince(now)) < 120
+        let live = current ? askLiveReading(now: now) : nil
+        let store = self.store
+        let tracking = UserDefaults.standard.bool(forKey: Self.perAppNetworkDefaultsKey)
+        let cores = max(1, latest?.cpu.cores.count ?? ProcessInfo.processInfo.activeProcessorCount)
+        let hasBattery =
+            latest?.battery?.isPresent ?? (liveSystem ?? latest?.system)?.batteryPresent ?? false
+        return try await withCheckedThrowingContinuation { continuation in
+            readQueue.async {
+                continuation.resume(
+                    with: Result {
+                        let history = try store?.askHistory(
+                            start: interval.start, end: interval.end)
+                        func build(_ area: AskArea, apps: Bool) throws -> AreaBrief {
+                            var input =
+                                try store?.askInputs(
+                                    area: area, start: interval.start, end: interval.end, now: now,
+                                    appName: appName, history: history, includeApps: apps)
+                                ?? AskBriefInputs(
+                                    area: area, start: interval.start, end: interval.end, now: now)
+                            input.live = live
+                            input.recording = store != nil
+                            input.networkTracking = tracking
+                            input.coreCount = cores
+                            input.hasBattery = hasBattery
+                            return AskBriefBuilder.brief(input)
+                        }
+                        guard areas.contains(.overall) else {
+                            return try areas.map { try build($0, apps: includeApps) }
+                        }
+                        // Every part's status first, without the costly app
+                        // ranking; then apps only for the parts that stood out.
+                        var parts = try AskArea.parts.map { try build($0, apps: false) }
+                        let standouts = parts.filter { $0.status >= .busy }
+                            .sorted { $0.status > $1.status }.prefix(2).map(\.area)
+                        var detailed: [AreaBrief] = []
+                        for area in standouts {
+                            let brief = try build(area, apps: includeApps)
+                            detailed.append(brief)
+                            if let index = parts.firstIndex(where: { $0.area == area }) {
+                                parts[index] = brief
+                            }
+                        }
+                        return [
+                            AskBriefBuilder.overall(parts, start: interval.start, end: interval.end)
+                        ] + detailed
+                    })
+            }
+        }
+    }
+
+    /// Every part's brief over the last hour, for the tiles on Ask's start page.
+    func askOverview(now: Date = Date()) async throws -> [AreaBrief] {
+        let earliest = try await askEarliestRecord()
+        let interval = AskTimeSpec.default.interval(now: now, earliest: earliest)
+        let parts = try await askBriefs(
+            areas: AskArea.parts, interval: interval, now: now, includeApps: false)
+        return [AskBriefBuilder.overall(parts, start: interval.start, end: interval.end)] + parts
+    }
+
+    func askResolve(_ identities: [ProcessIdentity]) async -> [ProcessIdentity] {
+        guard let store, !identities.isEmpty else { return [] }
+        return await withCheckedContinuation { continuation in
+            readQueue.async {
+                continuation.resume(returning: (try? store.askResolve(identities)) ?? [])
+            }
+        }
+    }
+
+    func askEarliestRecord() async throws -> Date? {
+        guard let store else { return nil }
+        return try await withCheckedThrowingContinuation { continuation in
+            readQueue.async {
+                continuation.resume(with: Result { try store.askEarliestRecord() })
+            }
+        }
+    }
+
+    func loadExplorerWindow(
+        domain: ClosedRange<Date>, identities: [ProcessIdentity],
+        completion: @escaping (Result<ExplorerWindowData, Error>) -> Void
+    ) {
+        guard let store else {
+            completion(
+                .success(
+                    ExplorerWindowData(domain: domain, granularity: .raw, system: [], processes: [])
+                ))
+            return
+        }
+        readQueue.async {
+            let result = Result {
+                let duration = domain.upperBound.timeIntervalSince(domain.lowerBound)
+                var tier = try store.finestGranularityCovering(
+                    from: domain.lowerBound, to: domain.upperBound)
+                if duration > 2 * 86_400 {
+                    tier = .hour
+                } else if duration > 2 * 3600, tier == .raw {
+                    tier = .minute
+                }
+                return try ExplorerWindowData(
+                    domain: domain, granularity: tier,
+                    system: store.systemHistory(
+                        from: domain.lowerBound, to: domain.upperBound, granularity: tier),
+                    processes: store.explorerProcessHistories(
+                        identities: identities,
+                        from: domain.lowerBound, to: domain.upperBound, granularity: tier))
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func searchExplorerProcesses(
+        domain: ClosedRange<Date>, query: String,
+        completion: @escaping (Result<[ExplorerProcess], Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.success([]))
+            return
+        }
+        readQueue.async {
+            let result = Result {
+                try store.explorerProcesses(
+                    from: domain.lowerBound, to: domain.upperBound, search: query)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func loadExplorerProcessesAt(
+        _ date: Date, completion: @escaping (Result<[ExplorerProcessObservation], Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.success([]))
+            return
+        }
+        let freshness = max(60, Self.configuredStandardResInterval())
+        readQueue.async {
+            let result = Result {
+                let tier = try store.finestGranularityCovering(from: date, to: date)
+                return try store.explorerProcessesAt(
+                    date, granularity: tier, rawFreshness: freshness)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func loadExplorerMachineRecordAt(
+        _ date: Date, completion: @escaping (Result<ExplorerMachineRecord?, Error>) -> Void
+    ) {
+        guard let store else {
+            completion(.success(nil))
+            return
+        }
+        let freshness = max(15, Self.configuredHighResInterval() * 3)
+        readQueue.async {
+            let result = Result {
+                let tier = try store.finestGranularityCovering(from: date, to: date)
+                return try store.explorerMachineRecordAt(
+                    date, granularity: tier, rawFreshness: freshness)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
 
     /// Load the top-consumers leaderboard for the History tab off the main
     /// thread, then deliver it back on the main thread.
@@ -2455,6 +2967,7 @@ final class SamplerModel: ObservableObject {
         cachedThermalEvents = nil
         cachedLeakSeries = nil
         cachedConsumerSeries = nil
+        cachedDisplayCaptureSeries = nil
     }
 
     private static func buildGroupReport(
@@ -2484,7 +2997,12 @@ final class SamplerModel: ObservableObject {
         if let cached = cachedLeakBoard, Date().timeIntervalSince(cached.at) < leakBoardMaxAge {
             return cached.entries
         }
-        let entries = (try? store.leakBoard()) ?? []
+        guard
+            let entries = try? store.leakBoard(
+                config: .init(maximumGap: max(180, Self.configuredStandardResInterval() * 2)))
+        else {
+            return cachedLeakBoard?.entries ?? []
+        }
         cachedLeakBoard = (Date(), entries)
         return entries
     }
@@ -2596,6 +3114,7 @@ final class SamplerModel: ObservableObject {
         let system = latest?.system
         let cpu = latest?.cpu
         let rosetta = RosettaCost.compute(latest?.processes ?? [])
+        let displayProcesses = latest?.processes ?? []
         readQueue.async {
             var bundle = InsightsBundle()
             bundle.leaks = self.currentLeakBoard(store)
@@ -2672,6 +3191,32 @@ final class SamplerModel: ObservableObject {
             let thermalDrift = ThermalDrift.analyze(
                 recent: recentHours, baseline: baselineHours, baselineWeeksAgo: 6)
 
+            // Only read a short, bounded history when WindowServer and replayd
+            // are both busy in the existing live scan (plus any busy known
+            // capture helper, for attribution).
+            // No new process scan, recording stream, or accessibility polling.
+            let captureCandidates = DisplayCaptureLoad.candidates(
+                from: displayProcesses, now: now)
+            let captureIdentities = captureCandidates.map(\.id)
+            let captureHistories: [ProcessIdentity: [ProcessHistoryPoint]]
+            if captureIdentities.isEmpty {
+                self.cachedDisplayCaptureSeries = nil
+                captureHistories = [:]
+            } else if let hit = self.cachedDisplayCaptureSeries,
+                hit.identities == captureIdentities,
+                now.timeIntervalSince(hit.at) < self.consumerMaxAge
+            {
+                captureHistories = hit.series
+            } else {
+                captureHistories =
+                    (try? store.processHistories(
+                        for: captureIdentities, seconds: DisplayCaptureLoad.historyWindow,
+                        now: now)) ?? [:]
+                self.cachedDisplayCaptureSeries = (now, captureIdentities, captureHistories)
+            }
+            let displayCapture = DisplayCaptureLoad.analyze(
+                processes: displayProcesses, histories: captureHistories, now: now)
+
             bundle.insights = InsightEngine.insights(
                 InsightEngine.Inputs(
                     totalRAM: system?.totalRAM ?? 0,
@@ -2685,7 +3230,8 @@ final class SamplerModel: ObservableObject {
                     cpu: cpu,
                     cpuConsumers: cpuConsumers,
                     networkConsumers: networkConsumers,
-                    thermalDrift: thermalDrift
+                    thermalDrift: thermalDrift,
+                    displayCapture: displayCapture
                 ))
 
             let ids = Set(bundle.leaks.map(\.identity))

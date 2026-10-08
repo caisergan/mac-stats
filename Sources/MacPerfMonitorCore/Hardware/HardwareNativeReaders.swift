@@ -691,7 +691,8 @@ enum HardwareNativeReaders {
         properties.append(HardwareProperty("Amperage", "\(sample.amperageMilliAmps) mA"))
         if let temperature = sample.temperatureCelsius {
             properties.append(
-                HardwareProperty("Temperature", String(format: "%.1f\u{00B0}C", temperature)))
+                HardwareProperty(
+                    "Temperature", TemperatureFormat.string(temperature, fractionDigits: 1)))
         }
         if let serial = sample.serialNumber {
             properties.append(HardwareProperty("Serial number", serial))
@@ -795,11 +796,11 @@ enum HardwareNativeReaders {
                     id: "\(parentID)/\(slug)",
                     title: t(group),
                     subtitle: t(
-                        "%1$@ \u{00B7} hottest %2$@\u{00B0}C", count,
-                        "\(Int(hottest.rounded()))"),
+                        "%1$@ \u{00B7} hottest %2$@", count, TemperatureFormat.string(hottest)),
                     systemImage: "thermometer.medium",
                     properties: readings.sorted { $0.key < $1.key }.map {
-                        HardwareProperty($0.key, String(format: "%.1f\u{00B0}C", $0.celsius))
+                        HardwareProperty(
+                            $0.key, TemperatureFormat.string($0.celsius, fractionDigits: 1))
                     }))
         }
 
@@ -852,9 +853,7 @@ enum HardwareNativeReaders {
         if let host = Sysctl.string("kern.hostname") {
             properties.append(HardwareProperty("Host name", host))
         }
-        var boot = timeval()
-        if Sysctl.raw("kern.boottime", into: &boot), boot.tv_sec > 0 {
-            let bootDate = Date(timeIntervalSince1970: TimeInterval(boot.tv_sec))
+        if let bootDate = SystemBootTime.read() {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
             formatter.timeStyle = .short

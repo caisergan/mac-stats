@@ -46,13 +46,17 @@ private struct SeriesAccumulator {
     var isTranslated: Bool
     var series: [(Date, UInt64)]
     var latest: UInt64
+
+    mutating func append(_ date: Date, _ footprint: UInt64) {
+        series.append((date, footprint))
+        latest = footprint  // rows are ascending, so the last wins
+    }
 }
 
 extension SampleStore {
     /// Seconds per fast-path analysis bucket: the raw 2-second series is
     /// averaged into these buckets in SQL before the detector sees it.
-    /// Averaging per bucket preserves the regression's slope and fit (each
-    /// point sits at its bucket's mean timestamp).
+    /// Each point uses its bucket's mean timestamp and recorded footprint mean.
     static let leakBucketSeconds = 30.0
 
     /// How far back the raw fast path looks. Long enough to satisfy the
@@ -72,15 +76,21 @@ extension SampleStore {
     ///    (~120 rows per process), and
     ///  - fresh leaks — too young to have enough minute buckets — read only
     ///    the last `leakRawWindow` of raw samples, averaged into 30-second
-    ///    buckets in SQL, keeping the original ~6-minute detection latency.
+    ///    buckets in SQL. Both paths use the detector's duration and freshness gates.
     public func leakBoard(
         window: TimeInterval = 2 * 3600,
         config: LeakDetector.Config = .default,
-        now: Date = Date()
+        now: Date = Date(),
+        liveIdentities: Set<ProcessIdentity>? = nil
     ) throws -> [LeakBoardEntry] {
         let minuteSince = now.addingTimeInterval(-min(window, 2 * 3600)).timeIntervalSince1970
         let rawSince = now.addingTimeInterval(-Self.leakRawWindow).timeIntervalSince1970
 
+        // The minute tier orders by the raw `bucket` column, which the covering
+        // index already yields in order; ordering by the CAST alias forced a
+        // temp b-tree sort of every row, name and path included. The raw tier
+        // groups the samples before joining the dimension, so the join runs
+        // once per 30 s bucket rather than once per sample (~4x fewer lookups).
         let (minuteTier, rawTier) = try databasePool.read { db in
             (
                 try Self.seriesByIdentity(
@@ -91,42 +101,50 @@ extension SampleStore {
                                CAST(t.bucket AS REAL) AS ts, t.footprint_avg AS fp
                         FROM process_minute t
                         JOIN processes p ON p.id = t.process_id
-                        WHERE t.bucket >= ?
-                        ORDER BY ts ASC
-                        """, arguments: [minuteSince]),
+                        WHERE t.bucket >= ? AND t.bucket + COALESCE(
+                            (SELECT bucket_seconds FROM system_minute WHERE bucket = t.bucket), 60) <= ?
+                        ORDER BY t.bucket ASC
+                        """, arguments: [minuteSince, now.timeIntervalSince1970]),
                 try Self.seriesByIdentity(
                     db,
                     sql: """
                         SELECT p.pid AS pid, p.start_time AS start, p.name AS name, p.is_translated AS translated,
-                               p.executable_path AS exec_path,
-                               AVG(ps.timestamp) AS ts,
-                               CAST(AVG(ps.phys_footprint) AS INTEGER) AS fp
-                        FROM process_samples ps
-                        JOIN processes p ON p.id = ps.process_id
-                        WHERE ps.timestamp >= ? AND ps.footprint_readable = 1
-                        GROUP BY ps.process_id, CAST(ps.timestamp / \(Self.leakBucketSeconds) AS INTEGER)
-                        ORDER BY ts ASC
-                        """, arguments: [rawSince])
+                               p.executable_path AS exec_path, g.ts AS ts, g.fp AS fp
+                        FROM (
+                            SELECT ps.process_id AS process_id,
+                                   AVG(ps.timestamp) AS ts,
+                                   CAST(AVG(ps.phys_footprint) AS INTEGER) AS fp
+                            FROM process_samples ps
+                            WHERE ps.timestamp >= ? AND ps.timestamp <= ? AND ps.footprint_readable = 1
+                            GROUP BY ps.process_id, CAST(ps.timestamp / \(Self.leakBucketSeconds) AS INTEGER)
+                        ) g
+                        JOIN processes p ON p.id = g.process_id
+                        ORDER BY g.ts ASC
+                        """, arguments: [rawSince, now.timeIntervalSince1970])
             )
         }
 
-        // A minute bucket is a far stronger observation than a raw tick, but the
-        // 20-minute duration floor (which a launch ramp can't clear once it
-        // plateaus) is the binding gate regardless; the minute tier only relaxes
-        // the sample-count floor so a sparsely-sampled long history still counts.
+        // Retained buckets still need sufficient duration and ongoing recent growth.
         var minuteConfig = config
         minuteConfig.minimumSamples = Swift.min(config.minimumSamples, 8)
 
         var entries: [LeakBoardEntry] = []
         for identity in Set(minuteTier.keys).union(rawTier.keys) {
-            // The minute tier judges the long window; a process it cannot
-            // flag (including one too young to have minute buckets) falls
-            // through to the raw fast path.
+            guard liveIdentities?.contains(identity) ?? true,
+                let latest =
+                    (rawTier[identity]?.series.last?.0 ?? minuteTier[identity]?.series.last?.0),
+                now.timeIntervalSince(latest) <= max(120, config.maximumGap)
+            else { continue }
+            // A rejected long trend must not qualify through a shorter window.
+            let minute = minuteTier[identity]?.series ?? []
+            let hasLongCoverage =
+                minute.count >= minuteConfig.minimumSamples
+                && (minute.last?.0.timeIntervalSince(minute.first!.0) ?? 0)
+                    >= config.minimumDuration
             let finding =
-                minuteTier[identity].flatMap {
-                    LeakDetector.analyze(series: $0.series, config: minuteConfig)
-                }
-                ?? rawTier[identity].flatMap {
+                hasLongCoverage
+                ? LeakDetector.analyze(series: minute, config: minuteConfig)
+                : rawTier[identity].flatMap {
                     LeakDetector.analyze(series: $0.series, config: config)
                 }
             guard let finding, let meta = rawTier[identity] ?? minuteTier[identity] else {
@@ -147,7 +165,7 @@ extension SampleStore {
         // flagged entry's "now" figure with its true latest raw sample. Only
         // the flagged few (usually zero) pay this indexed point read.
         for index in entries.indices {
-            if let exact = try latestRawFootprint(for: entries[index].identity) {
+            if let exact = try latestRawFootprint(for: entries[index].identity, through: now) {
                 entries[index].latestFootprint = exact
             }
         }
@@ -164,28 +182,37 @@ extension SampleStore {
         // same order: pid, start, name, translated, exec_path, ts, fp). This scan
         // touches tens of thousands of rows, so reading by index rather than by
         // column name avoids a name lookup per field per row.
-        for row in try Row.fetchAll(db, sql: sql, arguments: arguments) {
+        //
+        // A cursor, not `fetchAll`: the minute tier alone is ~80k rows on a busy
+        // Mac, and materialising them all (each carrying the process name and
+        // path) before folding them cost ~17 MB of transient heap every scan.
+        // The cursor's row is only valid until the next step, so every value is
+        // copied out before moving on. The accumulator is mutated in place
+        // through the dictionary's `default:` accessor; copying it out and back
+        // in made each append copy the whole series (quadratic per process).
+        let rows = try Row.fetchCursor(db, sql: sql, arguments: arguments)
+        while let row = try rows.next() {
             let pid: Int32 = row[0]
             let start: Double = row[1]
             let identity = ProcessIdentity(pid: pid, startTime: Date(timeIntervalSince1970: start))
             let ts: Double = row[5]
             let footprint = SQLInt.read(row[6])
-            var entry =
-                acc[identity]
-                ?? SeriesAccumulator(
+            acc[
+                identity,
+                default: SeriesAccumulator(
                     name: row[2], executablePath: row[4],
                     isTranslated: (row[3] as Int) != 0,
                     series: [], latest: 0)
-            entry.series.append((Date(timeIntervalSince1970: ts), footprint))
-            entry.latest = footprint  // rows are ascending, so the last wins
-            acc[identity] = entry
+            ].append(Date(timeIntervalSince1970: ts), footprint)
         }
         return acc
     }
 
     /// The most recent readable raw footprint for one process, or nil when it
     /// has no raw rows.
-    private func latestRawFootprint(for identity: ProcessIdentity) throws -> UInt64? {
+    private func latestRawFootprint(
+        for identity: ProcessIdentity, through date: Date
+    ) throws -> UInt64? {
         try databasePool.read { db in
             try Row.fetchOne(
                 db,
@@ -193,11 +220,14 @@ extension SampleStore {
                     SELECT ps.phys_footprint AS fp
                     FROM process_samples ps
                     JOIN processes p ON p.id = ps.process_id
-                    WHERE p.pid = ? AND p.start_time = ? AND ps.footprint_readable = 1
+                    WHERE p.pid = ? AND p.start_time = ? AND ps.footprint_readable = 1 AND ps.timestamp <= ?
                     ORDER BY ps.timestamp DESC
                     LIMIT 1
                     """,
-                arguments: [identity.pid, identity.startTime.timeIntervalSince1970]
+                arguments: [
+                    identity.pid, identity.startTime.timeIntervalSince1970,
+                    date.timeIntervalSince1970,
+                ]
             ).map { SQLInt.read($0["fp"]) }
         }
     }

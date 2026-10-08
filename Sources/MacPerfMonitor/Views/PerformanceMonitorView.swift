@@ -29,7 +29,7 @@ struct PerformanceMonitorView: View {
     @State private var importError: String?
     @State private var importRequestID: UUID?
 
-    @State private var span: PerfSpan = .live
+    @AppStorage("historyRange.performanceMonitor") private var span: PerfSpan = .thirtyMinutes
 
     /// The overlaid processes, in the order they were added. The canonical list
     /// lives in the shared `MonitorSelection`, so other surfaces (the Processes
@@ -410,6 +410,7 @@ struct PerformanceMonitorView: View {
                 series: series,
                 xDomain: visibleDomain,
                 minTop: metric.minTop,
+                quarterSteps: metric == .dieTemperature && TemperatureFormat.usesFahrenheit,
                 highlighted: highlighted,
                 accessibilityTitle: metric.label,
                 scrollZoom: ChartZoomActions(
@@ -508,6 +509,7 @@ struct PerformanceMonitorView: View {
                 series: focusedSeries,
                 xDomain: visibleDomain,
                 minTop: metric.minTop,
+                quarterSteps: metric == .dieTemperature && TemperatureFormat.usesFahrenheit,
                 highlighted: highlighted,
                 accessibilityTitle: metric.label,
                 zoomActions: ChartZoomActions(
@@ -1127,8 +1129,12 @@ struct PerformanceMonitorView: View {
             return PerfSeries(id: id, name: name, color: color, points: points)
         }
         return [
-            series(Self.cpuDieIdentity, "CPU die", ThermalStyle.cpu) { $0.cpuDieC },
-            series(Self.gpuDieIdentity, "GPU die", ThermalStyle.gpu) { $0.gpuDieC },
+            series(Self.cpuDieIdentity, "CPU die", ThermalStyle.cpu) {
+                $0.cpuDieC.map(TemperatureFormat.display)
+            },
+            series(Self.gpuDieIdentity, "GPU die", ThermalStyle.gpu) {
+                $0.gpuDieC.map(TemperatureFormat.display)
+            },
         ].compactMap { $0 }
     }
 
@@ -1208,8 +1214,14 @@ struct PerformanceMonitorView: View {
                 value: (SystemHistoryPoint) -> Double?
             )
             let sources: [ThermalSource] = [
-                (Self.cpuDieIdentity, "CPU die", ThermalStyle.cpu, { $0.cpuDieC }),
-                (Self.gpuDieIdentity, "GPU die", ThermalStyle.gpu, { $0.gpuDieC }),
+                (
+                    Self.cpuDieIdentity, "CPU die", ThermalStyle.cpu,
+                    { $0.cpuDieC.map(TemperatureFormat.display) }
+                ),
+                (
+                    Self.gpuDieIdentity, "GPU die", ThermalStyle.gpu,
+                    { $0.gpuDieC.map(TemperatureFormat.display) }
+                ),
             ]
             focusedStats = sources.compactMap { id, name, color, value in
                 let points = thermalPoints(in: domain, value: value)

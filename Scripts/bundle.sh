@@ -30,13 +30,23 @@ done
 # OS reports the process as "Mac Performance Monitor" in Activity Monitor, `ps`,
 # and the app's own process list — not "MacPerfMonitor".
 APP_NAME="Mac Performance Monitor"
-APP="build/$APP_NAME.app"
+APP="${MACPERF_BUNDLE_OUTPUT:-build/$APP_NAME.app}"
 EXECUTABLE_NAME="$APP_NAME"
 
 BIN_DIR="$(swift build --show-bin-path -c "$CONFIG")"
 BIN="$BIN_DIR/MacPerfMonitor"
 if [[ ! -x "$BIN" ]]; then
   echo "error: $BIN not found. Run Scripts/build.sh first." >&2
+  exit 1
+fi
+
+# macOS gives an app Liquid Glass and other current-SDK behaviour only when its
+# LC_BUILD_VERSION records SDK 26 or later. 2.2.0 shipped stamped "sdk 15.0"
+# (#117), so refuse to bundle a binary that would lose the current look.
+LINKED_SDK="$(otool -l "$BIN" | awk '/LC_BUILD_VERSION/ {found = 1} found && $1 == "sdk" {print $2; exit}')"
+if [[ -z "$LINKED_SDK" ]] || (( ${LINKED_SDK%%.*} < 26 )); then
+  echo "error: $BIN records SDK '${LINKED_SDK:-unknown}', not 26 or later." >&2
+  echo "       Build with Scripts/build.sh, which passes the real SDK version to the linker." >&2
   exit 1
 fi
 
@@ -48,6 +58,45 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Resources/Info.plist.
 cp "$BIN" "$APP/Contents/MacOS/$EXECUTABLE_NAME"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+
+case "$CONFIG" in
+  debug) INTENTS_CONFIG="Debug" ;;
+  release) INTENTS_CONFIG="Release" ;;
+  *) echo "error: unsupported build configuration $CONFIG" >&2; exit 1 ;;
+esac
+INTENTS_OBJECTS="$PWD/.build/out/Intermediates.noindex/MacPerfMonitor.build/$INTENTS_CONFIG/MacPerfMonitor-p.build/Objects-normal/arm64"
+INTENTS_SOURCES="$INTENTS_OBJECTS/MacPerfMonitor.SwiftFileList"
+if [[ ! -f "$INTENTS_SOURCES" ]]; then
+  echo "error: App Intents metadata inputs are missing. Build with Xcode 27 before bundling." >&2
+  exit 1
+fi
+INTENTS_VALUES="$(mktemp)"
+trap 'rm -f "$INTENTS_VALUES"' EXIT
+find "$INTENTS_OBJECTS" -maxdepth 1 -name '*.swiftconstvalues' -print > "$INTENTS_VALUES"
+if [[ ! -s "$INTENTS_VALUES" ]]; then
+  echo "error: compiled App Intents constants are missing." >&2
+  exit 1
+fi
+XCODE_DEVELOPER_DIR="$(xcode-select -p)"
+xcrun appintentsmetadataprocessor \
+  --output "$APP/Contents/Resources" \
+  --toolchain-dir "$XCODE_DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain" \
+  --module-name MacPerfMonitor \
+  --sdk-root "$(xcrun --sdk macosx --show-sdk-path)" \
+  --xcode-version "$(xcodebuild -version | awk '/Build version/ {print $3}')" \
+  --platform-family macOS \
+  --deployment-target 15.0 \
+  --target-triple arm64-apple-macos15.0 \
+  --source-file-list "$INTENTS_SOURCES" \
+  --swift-const-vals-list "$INTENTS_VALUES" \
+  --no-app-shortcuts-localization
+INTENTS_METADATA="$APP/Contents/Resources/Metadata.appintents/extract.actionsdata"
+if [[ ! -s "$INTENTS_METADATA" ]] \
+  || [[ "$(plutil -extract actions.OpenAskIntent.identifier raw -o - "$INTENTS_METADATA" 2>/dev/null)" != "OpenAskIntent" ]]; then
+  echo "error: App Intents discovery metadata was not produced." >&2
+  exit 1
+fi
+echo "Bundled App Intents metadata"
 
 # Bundled seed for the process glossary ("what is this process?"). The live,
 # frequently-updated copy is downloaded + verified from /glossary/ at runtime; this
@@ -71,6 +120,17 @@ else
   echo "warning: $HELPER_BIN not found; bundling without the privileged helper" >&2
 fi
 
+# --- mpm: read-only history access for AI agents ---------------------------
+# Command-line tool and MCP server (`mpm mcp`) that Claude Code or Codex run
+# from Contents/MacOS/mpm. Never writes to the database. Signed by sign.sh.
+MPM_BIN="$BIN_DIR/mpm"
+if [[ ! -x "$MPM_BIN" ]]; then
+  echo "error: $MPM_BIN is missing. Run Scripts/build.sh first." >&2
+  exit 1
+fi
+cp "$MPM_BIN" "$APP/Contents/MacOS/mpm"
+echo "Bundled mpm"
+
 # --- Sparkle auto-update framework -----------------------------------------
 # Copy the Sparkle.framework that SPM built next to the executable into the
 # bundle's Frameworks dir, and add the rpath the loader needs to find it. The
@@ -80,6 +140,9 @@ fi
 # app). Stripping happens never — the whole framework (incl. Autoupdate, the
 # Updater.app progress UI, and the XPC services) is required at runtime.
 SPARKLE_FW="$BIN_DIR/Sparkle.framework"
+if [[ ! -d "$SPARKLE_FW" ]]; then
+  SPARKLE_FW="ThirdParty/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+fi
 if [[ -d "$SPARKLE_FW" ]]; then
   mkdir -p "$APP/Contents/Frameworks"
   cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
@@ -88,7 +151,8 @@ if [[ -d "$SPARKLE_FW" ]]; then
     || echo "note: @executable_path/../Frameworks rpath already present" >&2
   echo "Bundled Sparkle.framework"
 else
-  echo "warning: $SPARKLE_FW not found; bundling without auto-update" >&2
+  echo "error: Sparkle.framework is missing; the app cannot launch without it." >&2
+  exit 1
 fi
 
 # --- Icons -----------------------------------------------------------------

@@ -16,10 +16,12 @@ extension MenuBarMetric {
                 .criticalPressure, .swap, .processCeiling, .leak,
             ])
         case .cpu:
-            return activeKinds.contains(.highCPU)
+            return !activeKinds.isDisjoint(with: [.highCPU, .sustainedProcessCPU])
         case .temperature:
             return activeKinds.contains(.thermalThrottle)
-        case .gpu, .energy, .network, .disk:
+        case .gpu:
+            return activeKinds.contains(.highGPU)
+        case .energy, .network, .disk:
             return false
         }
     }
@@ -61,7 +63,7 @@ enum CombinedMenuBarReadouts {
         case .temperature:
             // The hottest CPU die sensor; bare degree sign to keep the strip
             // narrow (the panel spells out the domains and units).
-            let value = (model.liveSystem?.cpuDieC).map { "\(Int($0.rounded()))°" } ?? "--"
+            let value = (model.liveSystem?.cpuDieC).map { TemperatureFormat.degrees($0) } ?? "--"
             return (value, nil)
         case .network:
             guard let rates = model.smoothedNetworkRates else { return ("--↓", "--↑") }
@@ -93,7 +95,7 @@ enum CombinedMenuBarImage {
         let image =
             switch presentation {
             case .focus:
-                focusImage(readout: readouts[0])
+                readouts.first.map(focusImage(readout:)) ?? NSImage(size: .zero)
             case .strip:
                 stripImage(readouts: readouts)
             }

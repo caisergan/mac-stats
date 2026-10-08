@@ -13,7 +13,7 @@ struct InsightsView: View {
     @EnvironmentObject private var appState: AppState
 
     @State private var bundle = SamplerModel.InsightsBundle()
-    @State private var window: HistoryWindow = .oneHour
+    @StoredHistoryWindow("historyRange.insights") private var window
     @State private var metric: ConsumerMetric = .averageFootprint
     @State private var consumers: [ProcessConsumer] = []
     @State private var loadingBundle = false
@@ -219,6 +219,7 @@ extension InsightEngine.Insight {
         case .cpu: return "gauge.with.dots.needle.67percent"
         case .network: return "network"
         case .thermalDrift: return "fanblades"
+        case .displayCapture: return "rectangle.on.rectangle"
         case .allClear: return "checkmark.circle.fill"
         }
     }
@@ -244,7 +245,7 @@ private struct HeadlineInsightsSection: View {
     }
 }
 
-private struct InsightCard: View {
+struct InsightCard: View {
     let insight: InsightEngine.Insight
 
     var body: some View {
@@ -468,7 +469,7 @@ private struct LeakBoardSection: View {
 
     var body: some View {
         HistorySection(
-            "Suspected leaks", systemImage: "arrow.up.right.circle.fill",
+            "Memory growth", systemImage: "arrow.up.right.circle.fill",
             subtitle: "Processes growing steadily over the last 2 hours, with their growth curves."
         ) {
             LazyVGrid(
@@ -504,12 +505,16 @@ private struct LeakCard: View {
                     .truncationMode(.middle)
                 if entry.isTranslated { RosettaBadge() }
                 Spacer(minLength: 8)
-                Text(t("%@%% confident", String(Int((entry.finding.confidence * 100).rounded()))))
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.orange.opacity(0.15), in: Capsule())
-                    .foregroundStyle(.orange)
+                Text(
+                    t(
+                        "%@ min observed",
+                        String(Int((entry.finding.durationSeconds / 60).rounded())))
+                )
+                .font(.caption2.weight(.medium))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.orange.opacity(0.15), in: Capsule())
+                .foregroundStyle(.orange)
             }
 
             if values.count >= 2 {
