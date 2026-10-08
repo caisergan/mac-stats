@@ -25,6 +25,21 @@ Notable changes to Mac Performance Monitor. This project follows
   nothing swapped and something else entirely with gigabytes of it. The
   pressure index at the top of the panel already counts swap without ever
   saying how much of it there is.
+- Processes grouped by app. The Processes tab has a new By App layout next to
+  List and Hierarchy: every Google Chrome Helper is filed under Google Chrome,
+  Safari's WebKit processes under Safari, and shells under the terminal they
+  run in, one row per app with the combined memory, CPU, threads and files.
+  Click an app to see its processes. The menu bar's Top memory and Top CPU
+  lists group the same way by default, with each app opening to its processes
+  sorted highest first; a button beside the list title switches back to one
+  row per process. Attribution uses the app bundle a process lives in, then
+  the process macOS holds responsible for it (as Activity Monitor does), then
+  its parent processes.
+- Force quit a whole app. Right-click an app row in By App, or use its actions
+  button in the menu bar lists. Every process in the app is stopped, the app
+  before its helpers so it cannot relaunch them, refusals are retried through
+  the helper when Full Coverage is on, and the app waits until each process
+  has really exited before greying it out, then says what survived and why.
 
 ### Changed
 
@@ -60,6 +75,9 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Fixed
 
+- Force Quit checks a process's start time immediately before killing it, so
+  a process that exited while the confirmation was open can no longer take an
+  unrelated process down with it once macOS reuses its PID.
 - A throughput figure too wide for its chip in the menu bar panel was
   truncated ("48.7 M..."). It now shrinks to fit.
 - The menu bar panel was slow to appear. Closing it threw the popover away

@@ -349,6 +349,11 @@ final class AppState: ObservableObject {
     /// resolves it, so every surface shares one safe confirm-then-kill path.
     @Published var pendingForceQuit: ProcessIdentity?
 
+    /// An app (all of its processes) awaiting a force-quit confirmation, from
+    /// an app row in the By App layouts. Resolved on the main window, like
+    /// `pendingForceQuit`.
+    @Published var pendingAppForceQuit: AppForceQuitTarget?
+
     /// A binary the user asked to inspect the code signature of (from a process
     /// row's "Codesign…" menu). Captured with its path/name at click time so the
     /// sheet survives the process exiting; the sheet hosted on the main window
@@ -808,6 +813,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate,
                 otherPromptPending: self.appState.helperPromptPending
                     || self.appState.loginItemPromptPending
                     || self.appState.pendingForceQuit != nil
+                    || self.appState.pendingAppForceQuit != nil
                     || self.appState.codesignTarget != nil)
         }
     }

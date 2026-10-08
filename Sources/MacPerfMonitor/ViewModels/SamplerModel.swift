@@ -1769,6 +1769,9 @@ final class SamplerModel: ObservableObject {
         if kinds.contains(.footprint) {
             menuLists.update(
                 .footprint, with: Ranking.topByFootprint(processes, limit: menuListLimit))
+            menuLists.updateApps(
+                .footprint,
+                with: Self.topApps(processes, limit: menuListLimit) { Double($0.physFootprint) })
         }
         if kinds.contains(.cpu) {
             // Rank by smoothed CPU, then copy only the top few (avoid copying all
@@ -1784,6 +1787,13 @@ final class SamplerModel: ObservableObject {
                     copy.cpuPercent = smoothedCPUs[i]
                     return copy
                 })
+            let smoothedProcesses = processes.indices.map { i in
+                var copy = processes[i]
+                copy.cpuPercent = smoothedCPUs[i]
+                return copy
+            }
+            menuLists.updateApps(
+                .cpu, with: Self.topApps(smoothedProcesses, limit: menuListLimit) { $0.cpuPercent })
         }
         if kinds.contains(.energy) {
             menuLists.update(
@@ -1833,6 +1843,22 @@ final class SamplerModel: ObservableObject {
             addGPUWorkloads(top)
             menuLists.update(.gpu, with: top)
         }
+    }
+
+    /// The `limit` apps with the highest total `value`, each with its members
+    /// sorted highest first, for the popovers' By App lists.
+    private static func topApps(
+        _ processes: [ProcessSample], limit: Int, value: (ProcessSample) -> Double
+    ) -> [AppProcessGroup] {
+        AppGrouping.group(processes)
+            .map { group -> (group: AppProcessGroup, total: Double) in
+                var group = group
+                group.processes.sort { value($0) > value($1) }
+                return (group, group.processes.reduce(0) { $0 + value($1) })
+            }
+            .sorted { $0.total > $1.total }
+            .prefix(limit)
+            .map(\.group)
     }
 
     /// Rebuild the main table's process list: every live process with its CPU
@@ -2208,6 +2234,18 @@ final class SamplerModel: ObservableObject {
         terminatedProcessIDs = Set(terminatedProcesses.keys)
         // Refresh the table at once so the killed row greys immediately rather
         // than waiting for the next heavy tick.
+        rebuildDisplayProcesses(live: latest?.processes ?? [])
+    }
+
+    /// `markTerminated` for many processes at once (an app's force quit),
+    /// rebuilding the table once rather than once per process.
+    func markTerminated(_ samples: [ProcessSample]) {
+        guard !samples.isEmpty else { return }
+        let now = Date()
+        for sample in samples {
+            terminatedProcesses[sample.id] = TerminatedProcess(sample: sample, terminatedAt: now)
+        }
+        terminatedProcessIDs = Set(terminatedProcesses.keys)
         rebuildDisplayProcesses(live: latest?.processes ?? [])
     }
 

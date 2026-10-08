@@ -19,6 +19,11 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
 
     public var pid: Int32
     public var ppid: Int32
+    /// The process macOS holds responsible for this one: the app that asked
+    /// launchd for an XPC service (Safari for its WebKit content processes),
+    /// or the terminal a shell runs in. Fixed for a process's lifetime. Nil
+    /// when unknown, or for traces recorded before it was captured.
+    public var responsiblePID: Int32?
     public var name: String
     public var executablePath: String?
     public var bundleID: String?
@@ -142,6 +147,7 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
         timestamp: Date,
         pid: Int32,
         ppid: Int32,
+        responsiblePID: Int32? = nil,
         name: String,
         executablePath: String? = nil,
         bundleID: String? = nil,
@@ -181,6 +187,7 @@ public struct ProcessSample: Sendable, Codable, Identifiable, Equatable {
         self.timestamp = timestamp
         self.pid = pid
         self.ppid = ppid
+        self.responsiblePID = responsiblePID
         self.name = name
         self.executablePath = executablePath
         self.bundleID = bundleID

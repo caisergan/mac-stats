@@ -29,6 +29,13 @@ struct ProcessListView: View {
     /// survives relaunches.
     @AppStorage("processShowHierarchy") private var showHierarchy = false
 
+    /// When on, every process is filed under the app it belongs to (helpers
+    /// under their app, shells under their terminal), one collapsible row per
+    /// app with the members' combined figures. Takes precedence over
+    /// `showHierarchy`; the two are kept as separate keys so the older
+    /// hierarchy preference carries over unchanged.
+    @AppStorage("processGroupByApp") private var groupByApp = false
+
     /// `launchd`, the ancestor of nearly every process. Hidden as a node in the
     /// hierarchy view since its parentage is implied.
     private static let launchdPID: Int32 = 1
@@ -58,7 +65,8 @@ struct ProcessListView: View {
             ProcessTable(
                 rows: rows,
                 revision: rowsRevision,
-                showHierarchy: showHierarchy,
+                showHierarchy: showHierarchy || groupByApp,
+                groupsByApp: groupByApp,
                 leakingIDs: model.leakingProcessIDs,
                 terminatedIDs: model.terminatedProcessIDs,
                 selection: $selection,
@@ -74,6 +82,7 @@ struct ProcessListView: View {
             .onChange(of: sortOrder) { _, _ in rebuildRows() }
             .onChange(of: search) { _, _ in rebuildRows() }
             .onChange(of: showHierarchy) { _, _ in rebuildRows() }
+            .onChange(of: groupByApp) { _, _ in rebuildRows() }
         }
     }
 
@@ -95,25 +104,41 @@ struct ProcessListView: View {
             }
             Divider()
                 .frame(height: 16)
-            Toggle(isOn: $showHierarchy) {
-                Label("Hierarchy", systemImage: "list.bullet.indent")
+            Picker("Layout", selection: layout) {
+                Text("List").tag(ProcessListLayout.flat)
+                Text("Hierarchy").tag(ProcessListLayout.hierarchy)
+                Text("By App").tag(ProcessListLayout.apps)
             }
-            .toggleStyle(.button)
+            .pickerStyle(.segmented)
+            .labelsHidden()
             .controlSize(.small)
-            .help("Group processes by which launched which.")
+            .fixedSize()
+            .help(
+                "List shows every process. Hierarchy nests processes by which launched which. By App adds each helper to the app it belongs to."
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
+    /// The segmented control's view of the two stored preferences.
+    private var layout: Binding<ProcessListLayout> {
+        Binding(
+            get: { groupByApp ? .apps : (showHierarchy ? .hierarchy : .flat) },
+            set: {
+                groupByApp = $0 == .apps
+                showHierarchy = $0 == .hierarchy
+            })
+    }
+
     /// The visible processes after the search filter, before sorting or nesting.
     private var filteredSamples: [ProcessSample] {
-        search.isEmpty
-            ? processes
-            : processes.filter {
-                $0.displayName.localizedCaseInsensitiveContains(search)
-                    || $0.name.localizedCaseInsensitiveContains(search)
-            }
+        search.isEmpty ? processes : processes.filter { Self.matches($0, search) }
+    }
+
+    private static func matches(_ sample: ProcessSample, _ search: String) -> Bool {
+        sample.displayName.localizedCaseInsensitiveContains(search)
+            || sample.name.localizedCaseInsensitiveContains(search)
     }
 
     /// Recompute the table's rows from the current inputs and bump the revision.
@@ -122,7 +147,9 @@ struct ProcessListView: View {
     /// column.
     private func rebuildRows() {
         let compare = Self.comparison(for: sortOrder)
-        if showHierarchy {
+        if groupByApp {
+            rows = Self.appNodes(processes, search: search, compare: compare)
+        } else if showHierarchy {
             rows = buildForest(from: filteredSamples, compare: compare)
         } else {
             rows = Self.sortedNodes(filteredSamples, compare: compare)
@@ -211,6 +238,50 @@ struct ProcessListView: View {
         }
     }
 
+    /// One row per app, holding its processes sorted by the active column, with
+    /// the apps themselves sorted by their combined figures. Grouping runs over
+    /// every process (a shell is filed under its terminal through ancestors the
+    /// filter may hide); the filter then keeps an app whole when its name
+    /// matches, or just its matching members. An app with a single process is
+    /// shown as that process's own row.
+    private static func appNodes(
+        _ samples: [ProcessSample], search: String,
+        compare: @escaping (ProcessSample, ProcessSample) -> Bool
+    ) -> [ProcessNode] {
+        var nodes: [ProcessNode] = []
+        var usedPIDs: Set<Int32> = []
+        for group in AppGrouping.group(samples) {
+            let members =
+                search.isEmpty || group.name.localizedCaseInsensitiveContains(search)
+                ? group.processes : group.processes.filter { matches($0, search) }
+            guard !members.isEmpty else { continue }
+            let children = sortedNodes(members, compare: compare)
+            if group.processes.count == 1 {
+                nodes.append(children[0])
+                continue
+            }
+            var pid = ProcessNode.appRowPID(for: group.id)
+            while !usedPIDs.insert(pid).inserted { pid = pid == Int32.min ? -1 : pid - 1 }
+            var base = members[0]
+            base.pid = pid
+            base.ppid = 0
+            base.responsiblePID = nil
+            base.startTime = .distantPast
+            base.name = group.name
+            // The icon provider resolves the enclosing `.app`, and a file name
+            // equal to `name` keeps `displayName` as the app's name.
+            base.executablePath =
+                group.id.hasPrefix("pid:")
+                ? group.iconPath : group.iconPath.map { "\($0)/Contents/MacOS/\(group.name)" }
+            base.isTranslated = false
+            nodes.append(
+                ProcessNode(
+                    process: ProcessNode.appRowSample(base, members: members),
+                    children: children, appMemberCount: members.count, appGroupID: group.id))
+        }
+        return nodes.sorted { compare($0.process, $1.process) }
+    }
+
     /// Build a parent/child forest from the visible processes, nesting each one
     /// under the visible process whose PID matches its parent PID. Processes
     /// whose parent is not in the visible set become roots, and every level is
@@ -274,6 +345,7 @@ private struct ProcessTable: View, Equatable {
     /// the parent rebuilds the rows.
     let revision: Int
     let showHierarchy: Bool
+    let groupsByApp: Bool
     let leakingIDs: Set<ProcessIdentity>
     let terminatedIDs: Set<ProcessIdentity>
     @Binding var selection: ProcessIdentity?
@@ -292,6 +364,7 @@ private struct ProcessTable: View, Equatable {
     static func == (lhs: ProcessTable, rhs: ProcessTable) -> Bool {
         lhs.revision == rhs.revision
             && lhs.showHierarchy == rhs.showHierarchy
+            && lhs.groupsByApp == rhs.groupsByApp
             && lhs.selection == rhs.selection
             && lhs.multiSelection == rhs.multiSelection
             && lhs.leakingIDs == rhs.leakingIDs
@@ -303,11 +376,13 @@ private struct ProcessTable: View, Equatable {
             rows: rows,
             revision: revision,
             showHierarchy: showHierarchy,
+            groupsByApp: groupsByApp,
             leakingIDs: leakingIDs,
             terminatedIDs: terminatedIDs,
             selection: $multiSelection,
             sortOrder: $sortOrder,
             menu: { ids in contextMenu(for: ids) },
+            appMenu: { node in appContextMenu(for: node) },
             values: model.processValuesTick.eraseToAnyPublisher(),
             onVisibleRowsChange: { pids in model.setVisibleProcesses(pids) }
         )
@@ -345,6 +420,9 @@ private struct ProcessTable: View, Equatable {
     /// full process action menu for one. Mirrors `ProcessActionMenu` item for
     /// item, built as an `NSMenu` because the table is AppKit-hosted.
     private func contextMenu(for ids: Set<ProcessIdentity>) -> NSMenu? {
+        // App rows (negative pids) stand for several processes; their menu is
+        // `appContextMenu`.
+        let ids = ids.filter { $0.pid > 0 }
         let menu = NSMenu()
         if ids.count > 1 {
             let addable = addableCount(ids)
@@ -448,6 +526,26 @@ private struct ProcessTable: View, Equatable {
                 enabled: live != nil
             ) {
                 appState.pendingForceQuit = id
+            })
+        return menu
+    }
+
+    /// The right-click menu for an app row in the By App layout.
+    private func appContextMenu(for node: ProcessNode) -> NSMenu? {
+        guard let groupID = node.appGroupID else { return nil }
+        // The whole app as it is now, not just the members the filter shows.
+        let group =
+            AppGrouping.group(model.latest?.processes ?? []).first { $0.id == groupID }
+            ?? AppProcessGroup(
+                id: groupID, name: node.process.displayName,
+                iconPath: node.process.executablePath,
+                processes: (node.children ?? []).map(\.process))
+        let menu = NSMenu()
+        menu.addItem(
+            ClosureMenuItem(
+                t("Force Quit \u{201C}%@\u{201D}\u{2026}", group.name), symbol: "xmark.octagon"
+            ) {
+                appState.pendingAppForceQuit = AppForceQuitTarget(group: group)
             })
         return menu
     }
@@ -594,7 +692,50 @@ struct ProcessNode: Identifiable, Equatable {
     var children: [ProcessNode]?
     /// A short label for the GPU table's category column (empty elsewhere).
     var badge: String = ""
+    /// Non-zero for an app row in the By App layout: how many processes it
+    /// holds. Its `process` is then a stand-in carrying the app's name, icon,
+    /// and the members' summed figures, under a negative pid no real process
+    /// has, so it is never mistaken for one.
+    var appMemberCount: Int = 0
+    /// The app row's `AppProcessGroup.id`, to look its full membership up
+    /// again (the row's children can be narrowed by the search filter).
+    var appGroupID: String?
     var id: ProcessIdentity { process.id }
+    var isAppRow: Bool { appMemberCount > 0 }
+
+    /// A negative pid for an app row, stable for the app's group id within a
+    /// run so its expansion state survives each rebuild.
+    static func appRowPID(for groupID: String) -> Int32 {
+        var hash: UInt32 = 2_166_136_261  // FNV-1a
+        for byte in groupID.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        return -Int32(hash & 0x3FFF_FFFF) - 1
+    }
+
+    /// `base` with its figures replaced by the totals over `members`.
+    static func appRowSample(_ base: ProcessSample, members: [ProcessSample]) -> ProcessSample {
+        var sample = base
+        sample.physFootprint = members.reduce(0) { $0 &+ $1.physFootprint }
+        sample.residentSize = members.reduce(0) { $0 &+ $1.residentSize }
+        sample.cpuPercent = members.reduce(0) { $0 + $1.cpuPercent }
+        sample.threadCount = members.reduce(0) { $0 &+ $1.threadCount }
+        sample.fdTotal = members.reduce(0) { $0 &+ $1.fdTotal }
+        sample.energyImpact = members.reduce(0) { $0 + $1.energyImpact }
+        sample.networkBytesPerSec = members.reduce(0) { $0 + $1.networkBytesPerSec }
+        sample.diskReadBytesPerSec = members.reduce(0) { $0 + $1.diskReadBytesPerSec }
+        sample.diskWriteBytesPerSec = members.reduce(0) { $0 + $1.diskWriteBytesPerSec }
+        let gpu = members.compactMap(\.gpuPercent)
+        sample.gpuPercent = gpu.isEmpty ? nil : gpu.reduce(0, +)
+        sample.gpuLastActive = members.compactMap(\.gpuLastActive).max()
+        // A partial total is still the most useful figure; show it unless no
+        // member's footprint could be read at all.
+        sample.footprintReadable = members.contains { $0.footprintReadable }
+        return sample
+    }
+}
+
+/// The Processes tab's three layouts.
+enum ProcessListLayout: Hashable {
+    case flat, hierarchy, apps
 }
 
 extension ProcessSample {

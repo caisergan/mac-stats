@@ -14,6 +14,11 @@ struct MenuBarContentView: View {
     @Environment(\.openSettings) private var openSettings
     var embedded = false
 
+    /// Whether the top list shows one row per app (shared with the CPU
+    /// dropdown) and which apps are open.
+    @AppStorage("menuProcessGroupByApp") private var groupByApp = true
+    @State private var expandedApps: Set<String> = []
+
     var body: some View {
         // Re-render once a second while the menu is open (and not at all while
         // closed), so the live read-outs tick at 1 Hz independently of the main
@@ -146,17 +151,31 @@ struct MenuBarContentView: View {
 
     private var topProcesses: some View {
         let top = menuLists.topFootprint
+        let apps = menuLists.topFootprintApps
         return VStack(alignment: .leading, spacing: 0) {
-            Text("Top memory")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
+            MenuProcessListHeader(title: "Top memory", groupByApp: $groupByApp)
 
-            if top.isEmpty {
+            if groupByApp ? apps.isEmpty : top.isEmpty {
                 Text("Sampling…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
+            } else if groupByApp {
+                ForEach(apps) { app in
+                    MenuAppGroupRow(
+                        group: app,
+                        value: ByteFormat.string(app.physFootprint),
+                        valueWidth: 60,
+                        trail: MenuTrail.sum(app.processes.map { model.trail(for: $0.id) }),
+                        isExpanded: expandedApps.contains(app.id),
+                        toggle: { expandedApps.formSymmetricDifference([app.id]) }
+                    ) { process in
+                        MenuProcessRow(
+                            process: process,
+                            trail: model.trail(for: process.id),
+                            isLeaking: model.leakingProcessIDs.contains(process.id))
+                    }
+                }
             } else {
                 ForEach(top) { process in
                     MenuProcessRow(

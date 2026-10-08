@@ -18,6 +18,11 @@ struct CPUMenuBarContentView: View {
 
     private let topology = CPUTopology.current
 
+    /// Whether the top list shows one row per app (shared with the memory
+    /// dropdown) and which apps are open.
+    @AppStorage("menuProcessGroupByApp") private var groupByApp = true
+    @State private var expandedApps: Set<String> = []
+
     var body: some View {
         // Re-render once a second while the popover is open, so the live CPU %,
         // load averages, sparkline, and core grid tick at 1 Hz (independently of
@@ -119,17 +124,28 @@ struct CPUMenuBarContentView: View {
 
     private var topProcesses: some View {
         let top = Array(menuLists.topCPU.prefix(8))
+        let apps = Array(menuLists.topCPUApps.prefix(8))
         return VStack(alignment: .leading, spacing: 0) {
-            Text("Top CPU")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
+            MenuProcessListHeader(title: "Top CPU", groupByApp: $groupByApp)
 
-            if top.isEmpty {
+            if groupByApp ? apps.isEmpty : top.isEmpty {
                 Text("Sampling…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
+            } else if groupByApp {
+                ForEach(apps) { app in
+                    MenuAppGroupRow(
+                        group: app,
+                        value: CPUFormat.percent(app.cpuPercent),
+                        valueWidth: 52,
+                        trail: MenuTrail.sum(app.processes.map { model.cpuTrail(for: $0.id) }),
+                        isExpanded: expandedApps.contains(app.id),
+                        toggle: { expandedApps.formSymmetricDifference([app.id]) }
+                    ) { process in
+                        CPUMenuProcessRow(process: process, trail: model.cpuTrail(for: process.id))
+                    }
+                }
             } else {
                 ForEach(top) { process in
                     CPUMenuProcessRow(
