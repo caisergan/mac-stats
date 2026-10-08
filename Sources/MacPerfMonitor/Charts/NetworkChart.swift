@@ -25,8 +25,12 @@ struct NetworkChart: View {
         scrubbable: Bool = false
     ) {
         self.init(
-            download: LiveColumn(points) { $0.networkInBytesPerSec },
-            upload: LiveColumn(points) { $0.networkOutBytesPerSec },
+            download: LiveColumn(
+                points, value: { $0.networkInBytesPerSec },
+                high: { $0.effectivePeaks.networkInBytesPerSec }),
+            upload: LiveColumn(
+                points, value: { $0.networkOutBytesPerSec },
+                high: { $0.effectivePeaks.networkOutBytesPerSec }),
             xDomain: xDomain, yDomain: yDomain, showsTimeAxis: showsTimeAxis,
             scrubbable: scrubbable)
     }
@@ -38,8 +42,8 @@ struct NetworkChart: View {
         scrubbable: Bool = false
     ) {
         self.init(
-            download: LiveColumn(window, .networkInBytesPerSec),
-            upload: LiveColumn(window, .networkOutBytesPerSec),
+            download: LiveColumn(window, .networkInBytesPerSec, peak: .networkInPeak),
+            upload: LiveColumn(window, .networkOutBytesPerSec, peak: .networkOutPeak),
             xDomain: xDomain, yDomain: yDomain, showsTimeAxis: showsTimeAxis,
             scrubbable: scrubbable)
     }
@@ -68,16 +72,15 @@ struct NetworkChart: View {
     }
 
     var body: some View {
-        let downPoints = LiveTrend.points(download, xDomain: xDomain)
-        let upPoints = LiveTrend.points(upload, xDomain: xDomain)
+        let downPoints = LiveTrend.allPoints(download)
+        let upPoints = LiveTrend.allPoints(upload)
         ZStack(alignment: .topLeading) {
             TrendChart(
                 series: [
                     TrendSeries(
-                        points: downPoints, color: NetworkStyle.download, filled: true),
+                        points: downPoints, color: NetworkStyle.download),
                     TrendSeries(
-                        points: upPoints, color: NetworkStyle.upload, filled: false,
-                        lineWidth: 1.8),
+                        points: upPoints, color: NetworkStyle.upload, lineWidth: 1.8),
                 ],
                 xDomain: xDomain,
                 yDomain: yDomain,

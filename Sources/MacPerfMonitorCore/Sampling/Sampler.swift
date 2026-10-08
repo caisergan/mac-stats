@@ -71,6 +71,8 @@ public final class Sampler {
     /// the GPU reader — only touched while the GPU item is shown.
     private let powerReader = PowerReader()
     private let smcReader = SMCReader()
+    private let aneReader = ANEActivityReader()
+    private let anePowerReader = ANEPowerReader()
 
     /// Optional per-process network reader, backed by a long-lived `nettop`. Nil
     /// unless the user opts into per-app network tracking; far heavier than the
@@ -148,6 +150,7 @@ public final class Sampler {
     private var cachedBattery: BatterySample?
     private var lastBatteryReadAt: Date?
     private let batteryReadInterval: TimeInterval = 5
+    private var batteryRuntimeEstimator = BatteryRuntimeEstimator()
 
     /// GPU registry, IOReport, and SMC reads are carried across subsecond system
     /// ticks. Their values do not benefit from polling above 1 Hz, and each call
@@ -203,6 +206,7 @@ public final class Sampler {
         var decompressions: UInt64
     }
     private var lastCounters: SystemCounters?
+    private var swapActivity = SwapActivityTracker()
     private var lastPressureLoad: UInt64?  // compressed + swapUsed, for trend
 
     /// Bytes-per-second growth of (compressed + swap) treated as full trend.
@@ -230,11 +234,14 @@ public final class Sampler {
     /// Call on the same serial queue the sampler ticks on.
     public func setPrivilegedReader(_ reader: PrivilegedReader?) {
         privilegedReader = reader
+        anePowerReader.setProvider(reader)
         // Fresh reader (or coverage turned off): clear any backoff so a newly
         // enabled/repaired helper is tried at once.
         privilegedFailureStreak = 0
         privilegedQuietUntil = nil
     }
+
+    public func stopANEPowerSampling() { anePowerReader.stop() }
 
     /// Install (or remove) the per-process network reader (a running `nettop`).
     /// Passing a reader starts per-app network attribution; nil stops it and
@@ -274,6 +281,15 @@ public final class Sampler {
             battery: battery, network: network, disk: disk)
     }
 
+    /// Whether the next `tickSystem` has a previous tick to difference against.
+    ///
+    /// The first tick after launch or `reset()` has none, so its CPU, network
+    /// and disk figures are zero by construction rather than measured. Anything
+    /// that records or charts samples should skip that tick: recorded, it puts a
+    /// zero at the start of every run, and the line climbs vertically out of it
+    /// when the chart resumes after the gap.
+    public var hasBaseline: Bool { lastSystemTime != nil }
+
     /// The cheap system-wide sample: total/per-core CPU and the memory/pressure
     /// figures. It does no per-process enumeration, so it is safe to call at a
     /// fast (sub-second) cadence to keep the menubar live without the cost of
@@ -298,6 +314,8 @@ public final class Sampler {
             lastBatteryReadAt.map { now.timeIntervalSince($0) >= batteryReadInterval } ?? true
         if readBattery {
             cachedBattery = batteryReader.read(now: now)
+            let estimate = batteryRuntimeEstimator.update(cachedBattery)
+            cachedBattery?.runtimeEstimate = estimate
             lastBatteryReadAt = now
         }
         let battery = cachedBattery
@@ -309,22 +327,35 @@ public final class Sampler {
         // second for the menu-bar icon and the history; every tick while a GPU
         // panel is open, since the driver's utilization figure moves between
         // sub-second reads).
+        if !readGPU {
+            aneReader.reset()
+            anePowerReader.stop()
+        }
         if readGPU,
             lastGPUReadAt.map({ now.timeIntervalSince($0) >= gpuReadInterval }) ?? true
         {
             var freshGPU = gpuReader.read()
+            freshGPU?.sampledAt = now
             // Thermal rides the GPU cadence but does not depend on the GPU
             // reader succeeding; SMCReader throttles itself internally.
             if let thermal = smcReader.read(now: now) { cachedThermal = thermal }
             if freshGPU != nil {
+                let activity = aneReader.read()
+                let anePower = anePowerReader.read(at: now)
+                freshGPU?.anePowerWatts = anePower?.watts
+                freshGPU?.anePowerSampledAt = anePower?.timestamp
+                freshGPU?.anePowerSampleInterval = anePower?.interval
+                freshGPU?.anePowerRequiresHelper = anePowerReader.requiresHelper
+                freshGPU?.aneTimeMillisecondsPerSecond = activity?.millisecondsPerSecond
+                freshGPU?.aneSampleIsPartial = activity?.isPartial
                 if let power = powerReader.read(now: now) {
                     freshGPU?.gpuPowerWatts = power.gpuWatts
-                    freshGPU?.anePowerWatts = power.aneWatts
                     freshGPU?.cpuPowerWatts = power.cpuWatts
                     freshGPU?.performanceStates = power.gpuStates
                     freshGPU?.activeResidency = power.gpuActiveResidency
                     freshGPU?.throttled = power.gpuThrottled
                     freshGPU?.powerCapPercent = power.gpuPowerCapPercent
+                    freshGPU?.bandwidth = power.gpuBandwidth
                 }
                 if let thermal = cachedThermal {
                     // Prefer the GPU's own cluster sensors; fall back to the
@@ -340,7 +371,8 @@ public final class Sampler {
         let gpu = readGPU ? cachedGPU : nil
         let thermal = readGPU ? cachedThermal : nil
         let system = sampleSystem(
-            now: now, wallDeltaSeconds: wallDeltaSeconds, cpuLoad: cpu.totalUsage, battery: battery,
+            now: now, wallDeltaSeconds: wallDeltaSeconds, cpuLoad: cpu.totalUsage,
+            loadAverages: (cpu.loadAverage1, cpu.loadAverage5, cpu.loadAverage15), battery: battery,
             network: network, disk: disk, bootVolume: bootVolume, gpu: gpu, thermal: thermal)
         lastSystemTime = now
         return (system, cpu, battery, network, disk, gpu)
@@ -779,13 +811,17 @@ public final class Sampler {
         lastSystemTime = nil
         lastProcessTime = nil
         lastCounters = nil
+        swapActivity.reset()
         lastPressureLoad = nil
         lastCoreTicks = nil
         cachedBattery = nil
+        batteryRuntimeEstimator = BatteryRuntimeEstimator()
         lastBatteryReadAt = nil
         cachedGPU = nil
         cachedThermal = nil
         lastGPUReadAt = nil
+        aneReader.reset()
+        anePowerReader.stop()
         networkReader.reset()
         diskReader.reset()
         bootVolumeReader.reset()
@@ -800,14 +836,24 @@ public final class Sampler {
     /// `cpuLoad` a true instantaneous figure (it used to be a since-boot average)
     /// and feeds the persisted system-history CPU timeline.
     private func sampleSystem(
-        now: Date, wallDeltaSeconds: TimeInterval, cpuLoad: Double, battery: BatterySample?,
+        now: Date, wallDeltaSeconds: TimeInterval, cpuLoad: Double,
+        loadAverages: (Double, Double, Double) = (0, 0, 0), battery: BatterySample?,
         network: NetworkSample?, disk: DiskSample?, bootVolume: BootVolumeReader.Capacity?,
         gpu: GPUSample? = nil, thermal: ThermalSample? = nil
     ) -> SystemSample {
         let totalRAM = memoryReader.totalRAM
         let vm = memoryReader.sampleVM()
         let swap = memoryReader.sampleSwap()
-        let level = memoryReader.pressureLevel()
+        let pressureReading = memoryReader.pressureLevelReading()
+        let level = pressureReading ?? .normal
+        let activity: SwapActivityTracker.Reading?
+        if let vm {
+            activity = swapActivity.sample(
+                at: now, pagesIn: vm.swapIns, pagesOut: vm.swapOuts, pageSize: vm.pageSize)
+        } else {
+            swapActivity.reset()
+            activity = nil
+        }
 
         let compressed = vm?.compressed ?? 0
         let swapUsed = swap?.used ?? 0
@@ -879,6 +925,9 @@ public final class Sampler {
             compressionsDelta: deltas.compressions,
             decompressionsDelta: deltas.decompressions,
             cpuLoad: cpuLoad,
+            loadAverage1: loadAverages.0,
+            loadAverage5: loadAverages.1,
+            loadAverage15: loadAverages.2,
             batteryPresent: battery?.isPresent ?? false,
             batteryCharge: battery?.chargePercent ?? 0,
             batteryPowerWatts: battery?.powerWatts ?? 0,
@@ -905,6 +954,24 @@ public final class Sampler {
             // record survives even when no thermal surface is active.
             thermalPressure: ThermalPressureState(ProcessInfo.processInfo.thermalState)
         )
+        sample.swapSampleValid = swap != nil
+        sample.pressureSampleValid = pressureReading != nil
+        sample.swapInBytesPerSecond = activity?.rateIn
+        sample.swapOutBytesPerSecond = activity?.rateOut
+        sample.swapInPagesDelta = activity?.pagesIn
+        sample.swapOutPagesDelta = activity?.pagesOut
+        sample.memoryPageSize = activity?.pageSize
+        sample.memorySampleInterval = activity?.elapsed
+        sample.gpuMemoryBytes = gpu?.inUseMemoryBytes
+        sample.gpuActiveResidency = gpu?.activeResidency
+        let bandwidth = gpu?.bandwidth?.estimatedRates(at: now)
+        sample.gpuReadBandwidthGBps = bandwidth?.read
+        sample.gpuWriteBandwidthGBps = bandwidth?.write
+        sample.gpuTotalBandwidthGBps = bandwidth?.total
+        sample.anePowerSampledAt = gpu?.anePowerSampledAt
+        sample.anePowerSampleInterval = gpu?.anePowerSampleInterval
+        sample.aneTimeMillisecondsPerSecond = gpu?.aneTimeMillisecondsPerSecond
+        sample.aneSampleIsPartial = gpu?.aneSampleIsPartial
         // Assigned rather than passed: the memberwise call is already at the
         // type checker's practical limit, and every one of these is a plain
         // optional copy.

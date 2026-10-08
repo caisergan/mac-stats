@@ -77,7 +77,7 @@ enum CombinedMenuBarReadouts {
 
         case .temperature:
             let temp = model.liveSystem?.cpuDieC
-            let val = temp.map { "\(Int($0.rounded()))°" } ?? "--°"
+            let val = temp.map { TemperatureFormat.degrees($0) } ?? "--°"
             return CombinedMenuBarReadout(
                 metric: metric, value: val, secondaryValue: nil,
                 isAlarm: isAlarm, batteryCharge: nil, isBatteryCharging: false,

@@ -1,10 +1,10 @@
 cask "mac-performance-monitor" do
-  version "1.7.0.205"
-  sha256 "da9ad510ed95f4bbced4de02e254c81b2d903bc703ba510e3ef2538aa49d1d01"
+  version "2.3.0.279"
+  sha256 "e87f6c7255b1905f09e17bed85a69011c9e34d1248a7aeb10c670e93068f1088"
 
   url "https://github.com/Zesty0wl/mac-performance-monitor/releases/download/v#{version}/MacPerformanceMonitor.pkg"
   name "Mac Performance Monitor"
-  desc "Menu bar performance monitor with recorded history and analytics"
+  desc "Performance monitor with recorded history and process charts"
   homepage "https://macperformancemonitor.com/"
 
   auto_updates true

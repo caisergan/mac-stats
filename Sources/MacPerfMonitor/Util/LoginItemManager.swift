@@ -15,6 +15,12 @@ import ServiceManagement
 /// so the published state and the `SMAppService` calls stay main-bound without
 /// actor isolation.
 final class LoginItemManager: ObservableObject {
+    static let startMinimisedKey = "startup.startMinimised"
+
+    @Published var startMinimised: Bool {
+        didSet { defaults.set(startMinimised, forKey: Self.startMinimisedKey) }
+    }
+
     /// Whether the app is currently registered to open at login, observed by the
     /// Settings toggle.
     @Published private(set) var isEnabled = false
@@ -23,13 +29,23 @@ final class LoginItemManager: ObservableObject {
 
     private let service = SMAppService.mainApp
     private let decidedKey = "loginItem.decisionMade"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        startMinimised = defaults.object(forKey: Self.startMinimisedKey) as? Bool ?? true
+    }
+
+    func shouldPresentMainWindow(menuBarEnabled: Bool) -> Bool {
+        !menuBarEnabled || !startMinimised
+    }
 
     /// Whether the user has been asked at least once, so the one-time prompt is
     /// shown only once. The actual choice is the login item's registration state,
     /// not a separate flag.
     private(set) var hasDecided: Bool {
-        get { UserDefaults.standard.bool(forKey: decidedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: decidedKey) }
+        get { defaults.bool(forKey: decidedKey) }
+        set { defaults.set(newValue, forKey: decidedKey) }
     }
 
     /// Surface the one-time first-launch prompt only when the user has not
@@ -43,9 +59,22 @@ final class LoginItemManager: ObservableObject {
     /// reactivates, since the user can flip "Open at Login" in System Settings
     /// out of process.
     func refresh() {
-        isEnabled = service.status == .enabled
-        AppLog.ui.notice(
-            "login item status: \(String(describing: self.service.status), privacy: .public)")
+        apply(service.status)
+    }
+
+    /// Reads the status off the main thread, then applies it: see
+    /// `HelperManager.refreshInBackground()` for why activation must not wait.
+    func refreshInBackground() {
+        let service = service
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = service.status
+            DispatchQueue.main.async { self.apply(status) }
+        }
+    }
+
+    private func apply(_ status: SMAppService.Status) {
+        isEnabled = status == .enabled
+        AppLog.ui.notice("login item status: \(String(describing: status), privacy: .public)")
     }
 
     /// Register the app as a login item so it opens at sign-in.

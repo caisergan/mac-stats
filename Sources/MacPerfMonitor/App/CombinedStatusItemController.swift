@@ -5,7 +5,14 @@ import SwiftUI
 
 @MainActor
 final class CombinedStatusItemController: NSObject {
+    var onPopoverOpened: (() -> Void)?
+
     private static let panelDefaultsKey = "combinedMenuBarPanel"
+    /// Stable identity for the status item, so macOS remembers where the user
+    /// Command-dragged it. Without one, every relaunch (an update, a login)
+    /// inserts the item at the default slot beside the notch, where a crowded
+    /// menu bar hides it with no indication (#120).
+    static let statusItemAutosaveName = "MacPerfMonitorCombined"
     private static let alarmImage: NSImage = {
         let size = NSSize(width: 12, height: 12)
         let image = NSImage(size: size, flipped: false) { rect in
@@ -29,7 +36,7 @@ final class CombinedStatusItemController: NSObject {
     private let appState: AppState
     private let helperManager: HelperManager
     private let updateController: UpdateController
-    private let appModeManager: AppModeManager
+    private let components: AppComponentsManager
     private let languageManager: AppLanguageManager
     private let configuration: CombinedMenuBarConfiguration
     private let notchDisplay: NotchDisplayController
@@ -42,7 +49,6 @@ final class CombinedStatusItemController: NSObject {
     /// for that item alone rather than for the whole bar.
     private var separateSignatures: [MenuBarMetric: String] = [:]
     private var popover: NSPopover?
-    private var router: NSHostingView<MenuBarWindowRouter>?
     private var cancellables = Set<AnyCancellable>()
     private var shownSignature: String?
     private var activeConsumer: MenuListKind?
@@ -50,8 +56,11 @@ final class CombinedStatusItemController: NSObject {
     /// Whether the open popover is showing the GPU panel, which is registered
     /// as a live GPU surface so the device is read every tick while it shows.
     private var gpuPanelLive = false
-    private var currentPanel: MenuBarMetric
-    private lazy var panelSelection = CombinedMenuBarPanelSelection(metric: currentPanel)
+    private var currentPanel: CombinedMenuBarPanel
+    private lazy var panelSelection = CombinedMenuBarPanelSelection(panel: currentPanel)
+    /// The menu bar item switch (`AppComponentsManager`). Off removes every item
+    /// this controller owns, whatever the presentation.
+    private var itemsVisible = true
     /// Drives `MenuBarPanelGate`: the panel's content subtree exists only while
     /// the popover is on screen.
     private let panelVisibility = MenuBarPanelVisibility()
@@ -63,7 +72,7 @@ final class CombinedStatusItemController: NSObject {
 
     init(
         model: SamplerModel, appState: AppState, helperManager: HelperManager,
-        updateController: UpdateController, appModeManager: AppModeManager,
+        updateController: UpdateController, components: AppComponentsManager,
         languageManager: AppLanguageManager,
         configuration: CombinedMenuBarConfiguration, notchDisplay: NotchDisplayController
     ) {
@@ -71,13 +80,13 @@ final class CombinedStatusItemController: NSObject {
         self.appState = appState
         self.helperManager = helperManager
         self.updateController = updateController
-        self.appModeManager = appModeManager
+        self.components = components
         self.languageManager = languageManager
         self.configuration = configuration
         self.notchDisplay = notchDisplay
-        currentPanel =
+        currentPanel = .metric(
             UserDefaults.standard.string(forKey: Self.panelDefaultsKey)
-            .flatMap(MenuBarMetric.init(rawValue:)) ?? configuration.focusedMetric
+                .flatMap(MenuBarMetric.init(rawValue:)) ?? configuration.focusedMetric)
         super.init()
     }
 
@@ -88,7 +97,7 @@ final class CombinedStatusItemController: NSObject {
                 self?.reconcileMenuClock()
             }
             .store(in: &cancellables)
-        model.$activeAlertKinds
+        model.$activeAlerts
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refresh() }
             .store(in: &cancellables)
@@ -100,14 +109,40 @@ final class CombinedStatusItemController: NSObject {
                 }
             }
             .store(in: &cancellables)
-        reconcileItems()
+        components.$state
+            .receive(on: RunLoop.main)
+            .sink { [weak self] state in self?.applyVisibility(state.menuBarItem) }
+            .store(in: &cancellables)
+        applyVisibility(components.menuBarItem)
         reconcileGPUSampling()
     }
+
+    /// Install or remove the status items to match the switch. Removing them is
+    /// the same deregistration the quit path uses, so macOS records a deliberate
+    /// removal rather than a vanished item.
+    private func applyVisibility(_ shouldShow: Bool) {
+        guard shouldShow != itemsVisible || (shouldShow && !hasItems) else { return }
+        itemsVisible = shouldShow
+        if shouldShow {
+            AppLog.ui.notice("menu bar item shown")
+        } else {
+            AppLog.ui.notice("menu bar item hidden by preference")
+            menuClock.close()
+            popover?.performClose(nil)
+            popover = nil
+        }
+        reconcileItems()
+    }
+
+    private var hasItems: Bool { statusItem != nil || !separateItems.isEmpty }
 
     /// Bring the bar in line with the chosen presentation: one combined item for
     /// `focus` and `strip`, or one item per selected read-out for `separate`.
     private func reconcileItems() {
-        if configuration.presentation == .separate {
+        if !itemsVisible {
+            for metric in separateItems.keys { removeSeparateItem(metric) }
+            removeCombinedItem()
+        } else if configuration.presentation == .separate {
             if statusItem != nil { removeCombinedItem() }
             let wanted = Set(configuration.selectedMetrics)
             for metric in separateItems.keys where !wanted.contains(metric) {
@@ -120,13 +155,13 @@ final class CombinedStatusItemController: NSObject {
             for metric in separateItems.keys { removeSeparateItem(metric) }
             installCombinedItem()
         }
-        attachRouterIfNeeded()
         refresh()
     }
 
     private func installCombinedItem() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.autosaveName = Self.statusItemAutosaveName
         item.button?.target = self
         item.button?.action = #selector(togglePopover(_:))
         item.button?.imagePosition = .imageOnly
@@ -135,7 +170,6 @@ final class CombinedStatusItemController: NSObject {
 
     private func removeCombinedItem() {
         guard let item = statusItem else { return }
-        if router?.superview === item.button { detachRouter() }
         NSStatusBar.system.removeStatusItem(item)
         statusItem = nil
         shownSignature = nil
@@ -161,7 +195,6 @@ final class CombinedStatusItemController: NSObject {
 
     private func removeSeparateItem(_ metric: MenuBarMetric) {
         guard let item = separateItems.removeValue(forKey: metric) else { return }
-        if router?.superview === item.button { detachRouter() }
         // Removing an item clears its preferred-position default, so stash it
         // first and put it back on the next install. Adapted from Stats'
         // save/restoreNSStatusItemPosition (Kit/helpers.swift).
@@ -197,21 +230,6 @@ final class CombinedStatusItemController: NSObject {
         defaults.removeObject(forKey: Self.savedPositionKey(for: metric))
     }
 
-    /// The router hosting view backs the panel's "open window" / "open settings"
-    /// actions, so it only has to live in one button's hierarchy.
-    private func attachRouterIfNeeded() {
-        guard router?.superview == nil else { return }
-        guard let button = anyButton else { return }
-        let host = router ?? NSHostingView(rootView: MenuBarWindowRouter())
-        host.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
-        button.addSubview(host)
-        router = host
-    }
-
-    private func detachRouter() {
-        router?.removeFromSuperview()
-    }
-
     /// Any button this controller owns, preferring the combined item.
     private var anyButton: NSStatusBarButton? {
         statusItem?.button
@@ -239,8 +257,6 @@ final class CombinedStatusItemController: NSObject {
         if panelVisibility.isOpen { panelVisibility.isOpen = false }
         popover?.performClose(nil)
         popover = nil
-        detachRouter()
-        router = nil
         for metric in separateItems.keys { removeSeparateItem(metric) }
         removeCombinedItem()
         model.setGPUSamplingEnabled(false)
@@ -252,8 +268,10 @@ final class CombinedStatusItemController: NSObject {
     }
 
     private func configurationChanged() {
-        if !configuration.selectedMetrics.contains(configuration.focusedMetric) {
-            configuration.focusedMetric = configuration.selectedMetrics[0]
+        if !configuration.selectedMetrics.contains(configuration.focusedMetric),
+            let first = configuration.selectedMetrics.first
+        {
+            configuration.focusedMetric = first
         }
         shownSignature = nil
         separateSignatures.removeAll()
@@ -287,7 +305,7 @@ final class CombinedStatusItemController: NSObject {
         let readouts = CombinedMenuBarReadouts.current(
             for: metrics, styles: styles, model: model, colors: configuration.colorStates,
             isDark: anyButton?.effectiveAppearance.isDarkMenuBar ?? true)
-        let alarmCount = configuration.showsAlarmMarker ? model.activeAlertKinds.count : 0
+        let alarmCount = configuration.showsAlarmMarker ? model.activeAlerts.count : 0
         let alarmHost = readouts.first(where: \.isAlarm)?.metric ?? metrics.first
 
         for readout in readouts {
@@ -307,7 +325,7 @@ final class CombinedStatusItemController: NSObject {
             button.attributedTitle = alarmTitle(count: showsAlarm ? alarmCount : 0)
             let summary = summaryText(for: readout)
             let alarmSuffix =
-                showsAlarm ? ", \(alarmCount) active alarm\(alarmCount == 1 ? "" : "s")" : ""
+                showsAlarm ? ", " + t("Active alerts: %@", alarmCount.formatted()) : ""
             button.toolTip = summary + alarmSuffix
             button.setAccessibilityLabel("\(AppInfo.displayName), \(summary)\(alarmSuffix)")
             separateSignatures[metric] = signature
@@ -357,7 +375,7 @@ final class CombinedStatusItemController: NSObject {
         let readouts = CombinedMenuBarReadouts.current(
             for: metrics, styles: styles, model: model, colors: configuration.colorStates,
             isDark: isDark)
-        let alarmCount = configuration.showsAlarmMarker ? model.activeAlertKinds.count : 0
+        let alarmCount = configuration.showsAlarmMarker ? model.activeAlerts.count : 0
         let signature =
             "\(configuration.presentation.rawValue)|\(alarmCount)|\(isDark ? "dk" : "lt")|"
             + readouts.map { readout in
@@ -373,7 +391,7 @@ final class CombinedStatusItemController: NSObject {
         button.attributedTitle = alarmTitle(count: alarmCount)
         let summary = readouts.map { summaryText(for: $0) }.joined(separator: ", ")
         let alarmSuffix =
-            alarmCount > 0 ? ", \(alarmCount) active alarm\(alarmCount == 1 ? "" : "s")" : ""
+            alarmCount > 0 ? ", " + t("Active alerts: %@", alarmCount.formatted()) : ""
         button.toolTip = summary + alarmSuffix
         button.setAccessibilityLabel("\(AppInfo.displayName), \(summary)\(alarmSuffix)")
         shownSignature = signature
@@ -401,24 +419,30 @@ final class CombinedStatusItemController: NSObject {
 
     @objc private func togglePopover(_ sender: Any?) {
         let button: NSStatusBarButton
-        let metric: MenuBarMetric?
+        let panel: CombinedMenuBarPanel?
         if let clicked = sender as? NSStatusBarButton,
             let owner = separateItems.first(where: { $0.value.button === clicked })?.key
         {
             // Separate mode: the item that was clicked IS the read-out, so there
-            // is nothing to hit test.
+            // is nothing to hit test beyond the alarm badge it may carry.
             button = clicked
-            metric = owner
+            if let badge = alertRect(in: clicked), let point = clickLocation(in: clicked),
+                badge.contains(point)
+            {
+                panel = .alerts
+            } else {
+                panel = .metric(owner)
+            }
         } else if let combined = statusItem?.button {
             button = combined
-            metric = clickedMetric(in: combined)
+            panel = clickedPanel(in: combined)
         } else {
             return
         }
         if let popover, popover.isShown {
-            if let metric, metric != currentPanel {
-                panelSelection.metric = metric
-                selectPanel(metric)
+            if let panel, panel != currentPanel {
+                panelSelection.panel = panel
+                selectPanel(panel)
                 if configuration.presentation == .separate {
                     popover.performClose(sender)
                     show(popover, from: button)
@@ -429,13 +453,14 @@ final class CombinedStatusItemController: NSObject {
             popover.performClose(sender)
             return
         }
-        if let metric {
-            panelSelection.metric = metric
-            selectPanel(metric)
+        if let panel {
+            panelSelection.panel = panel
+            selectPanel(panel)
         }
         let popover = popover ?? makePopover()
         self.popover = popover
         show(popover, from: button)
+        if popover.isShown { onPopoverOpened?() }
     }
 
     /// Raise the gate, then show. The order matters both ways round: the
@@ -458,7 +483,7 @@ final class CombinedStatusItemController: NSObject {
             MenuBarPanelGate(visibility: self.panelVisibility) {
                 CombinedMenuBarContentView(
                     selection: self.panelSelection,
-                    selectionChanged: { [weak self] metric in self?.selectPanel(metric) },
+                    selectionChanged: { [weak self] panel in self?.selectPanel(panel) },
                     dismiss: { [weak popover] in popover?.performClose(nil) }
                 )
             }
@@ -468,7 +493,7 @@ final class CombinedStatusItemController: NSObject {
             .environmentObject(self.helperManager)
             .environmentObject(self.updateController)
             .environmentObject(self.menuClock)
-            .environmentObject(self.appModeManager)
+            .environmentObject(self.components)
             .environmentObject(self.configuration)
             .environmentObject(self.notchDisplay)
         }
@@ -478,7 +503,7 @@ final class CombinedStatusItemController: NSObject {
         return popover
     }
 
-    private func clickedMetric(in button: NSStatusBarButton) -> MenuBarMetric? {
+    private func clickedPanel(in button: NSStatusBarButton) -> CombinedMenuBarPanel? {
         let metrics =
             configuration.presentation == .focus
             ? [configuration.focusedMetric] : configuration.selectedMetrics
@@ -486,17 +511,8 @@ final class CombinedStatusItemController: NSObject {
         let styles = configuration.widgetStyles
         let readouts = CombinedMenuBarReadouts.current(
             for: metrics, styles: styles, model: model)
-        let local: NSPoint
-        if let event = NSApp.currentEvent,
-            (event.type == .leftMouseDown || event.type == .leftMouseUp),
-            event.window === button.window
-        {
-            local = button.convert(event.locationInWindow, from: nil)
-        } else if let window = button.window {
-            let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-            local = button.convert(windowPoint, from: nil)
-        } else {
-            return configuration.presentation == .focus ? metrics[0] : nil
+        guard let local = clickLocation(in: button) else {
+            return configuration.presentation == .focus ? .metric(metrics[0]) : nil
         }
 
         let imageRect =
@@ -505,24 +521,59 @@ final class CombinedStatusItemController: NSObject {
                 x: (button.bounds.width - (button.image?.size.width ?? 0)) / 2,
                 y: 0, width: button.image?.size.width ?? button.bounds.width,
                 height: button.bounds.height)
-        if model.activeAlertKinds.count > 0, local.x > imageRect.maxX {
-            return readouts.first(where: \.isAlarm)?.metric
-        }
-        let imageX = min(max(local.x - imageRect.minX, 0), imageRect.width)
-        return CombinedMenuBarImage.metric(
-            at: imageX, readouts: readouts, styles: styles,
-            presentation: configuration.presentation)
+        return Self.panel(
+            at: local, imageRect: imageRect, alertRect: alertRect(in: button),
+            readouts: readouts, presentation: configuration.presentation, styles: styles)
     }
 
-    private func selectPanel(_ metric: MenuBarMetric) {
-        guard metric != currentPanel else {
+    /// Where the click that is being handled landed, in the button's own
+    /// coordinates. Nil when there is no window to measure against.
+    private func clickLocation(in button: NSStatusBarButton) -> NSPoint? {
+        if let event = NSApp.currentEvent,
+            event.type == .leftMouseDown || event.type == .leftMouseUp,
+            event.window === button.window
+        {
+            return button.convert(event.locationInWindow, from: nil)
+        } else if let window = button.window {
+            let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+            return button.convert(windowPoint, from: nil)
+        }
+        return nil
+    }
+
+    /// The alarm badge's area on a button, nil when the button carries none.
+    private func alertRect(in button: NSStatusBarButton) -> NSRect? {
+        guard !model.activeAlerts.isEmpty, button.imagePosition == .imageLeading else {
+            return nil
+        }
+        return (button.cell as? NSButtonCell)?.titleRect(forBounds: button.bounds)
+    }
+
+    static func panel(
+        at point: NSPoint, imageRect: NSRect, alertRect: NSRect?,
+        readouts: [CombinedMenuBarReadout], presentation: MenuBarPresentation,
+        styles: [MenuBarMetric: MenuBarWidgetStyle] = [:]
+    ) -> CombinedMenuBarPanel? {
+        if let alertRect, alertRect.contains(point) { return .alerts }
+        let imageX = min(max(point.x - imageRect.minX, 0), imageRect.width)
+        return CombinedMenuBarImage.metric(
+            at: imageX, readouts: readouts, styles: styles, presentation: presentation
+        ).map {
+            .metric($0)
+        }
+    }
+
+    private func selectPanel(_ panel: CombinedMenuBarPanel) {
+        guard panel != currentPanel else {
             reconcileGPUSampling()
             return
         }
-        currentPanel = metric
-        UserDefaults.standard.set(metric.rawValue, forKey: Self.panelDefaultsKey)
+        currentPanel = panel
+        if case .metric(let metric) = panel {
+            UserDefaults.standard.set(metric.rawValue, forKey: Self.panelDefaultsKey)
+        }
         if popover?.isShown == true {
-            replaceActiveConsumer(with: consumerKind(for: metric))
+            replaceActiveConsumer(with: consumerKind(for: panel))
             model.requestImmediateTick()
         }
         reconcileGPUSampling()
@@ -543,16 +594,16 @@ final class CombinedStatusItemController: NSObject {
         if let kind { model.addPopoverProcessConsumer(kind) }
     }
 
-    private func consumerKind(for metric: MenuBarMetric) -> MenuListKind? {
-        switch metric {
-        case .pressure, .ram: return .footprint
-        case .cpu: return .cpu
-        case .energy: return .energy
-        case .network: return .network
-        case .disk: return .disk
-        case .gpu: return .gpu
+    private func consumerKind(for panel: CombinedMenuBarPanel) -> MenuListKind? {
+        switch panel {
+        case .alerts, .metric(.pressure), .metric(.ram): return .footprint
+        case .metric(.cpu): return .cpu
+        case .metric(.energy): return .energy
+        case .metric(.network): return .network
+        case .metric(.disk): return .disk
+        case .metric(.gpu): return .gpu
         // Neither reads a process list: they are whole-machine figures.
-        case .temperature, .sensors: return nil
+        case .metric(.temperature), .metric(.sensors): return nil
         }
     }
 
@@ -560,7 +611,8 @@ final class CombinedStatusItemController: NSObject {
         // Temperature rides the GPU/SMC read path, so a visible temperature
         // readout or panel keeps that path live exactly like the GPU ones.
         let panelLive =
-            popover?.isShown == true && (currentPanel == .gpu || currentPanel == .temperature)
+            popover?.isShown == true
+            && (currentPanel == .metric(.gpu) || currentPanel == .metric(.temperature))
         if panelLive != gpuPanelLive {
             gpuPanelLive = panelLive
             if panelLive { model.addGPUConsumer() } else { model.removeGPUConsumer() }

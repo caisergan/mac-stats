@@ -16,8 +16,8 @@ struct CombinedMenuBarReadout {
     var secondaryValue: String?
     var isAlarm: Bool
     var batteryCharge: Double?
-    var isBatteryCharging: Bool
-    var isBatteryPresent: Bool
+    var isBatteryCharging: Bool = false
+    var isBatteryPresent: Bool = false
     var isOnAC: Bool = false
     var isLowPowerMode: Bool = false
     var batteryTimeText: String?
@@ -167,16 +167,18 @@ extension MenuBarMetric {
                 .criticalPressure, .swap, .processCeiling, .leak,
             ])
         case .cpu:
-            return activeKinds.contains(.highCPU)
+            return !activeKinds.isDisjoint(with: [.highCPU, .sustainedProcessCPU])
         case .temperature:
             return activeKinds.contains(.thermalThrottle)
+        case .gpu:
+            return activeKinds.contains(.highGPU)
         // The memory alarms stay on the pressure readout, which is the health
         // signal. Firing them on `ram` too would just paint the same warning red
         // twice in one strip.
         // Sensors carries no alarm of its own: the thermal alarm already fires
         // on the temperature read-out, and a voltage rail has no threshold this
         // app would be right to assert.
-        case .ram, .gpu, .energy, .network, .disk, .sensors:
+        case .ram, .energy, .network, .disk, .sensors:
             return false
         }
     }

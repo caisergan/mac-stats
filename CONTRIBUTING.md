@@ -1,28 +1,104 @@
-# Contributing to MacPerfMonitor
+# Contributing to Mac Performance Monitor
 
-Thank you for your interest in improving MacPerfMonitor. This project aims to be a
-credible, auditable, no-telemetry macOS system tool, and contributions of all
-sizes are welcome.
+Mac Performance Monitor is a native macOS tool with local performance history
+and no usage telemetry. Contributions to code, tests, docs, and translations
+are welcome. Target `main` for new work; it contains the 2.0 release source.
 
 ## Building and testing
 
-MacPerfMonitor builds with the Swift toolchain and needs no Apple Developer account or
-signing identity.
+Building and running the tests needs no Apple Developer account or signing key.
+Use Apple silicon and macOS 15 or later. The app bundle needs Xcode 27 for App
+Intents metadata and the macOS 27 SDK. Apple's `xcstringstool` compiles the
+String Catalog.
 
 ```sh
-swift build          # compile everything
-swift test           # run the full test suite
-Scripts/run.sh       # build, bundle, ad-hoc sign, and launch the app
+swift build
+swift test
+Scripts/run.sh --adhoc
 ```
 
-Use `Scripts/run.sh --release` to match the shipping build. Note that
-`swift build` alone does not refresh the `build/MacPerfMonitor.app` bundle; always use
-`Scripts/run.sh` when you want to launch your latest changes.
+The last command bundles and launches `build/Mac Performance Monitor.app`.
+`swift build` alone does not refresh that bundle. Add `--release` to test an
+optimized build. This does not make it a signed, notarized distribution build.
 
-**Requirements:** macOS 15 (Sequoia) or later and a Swift 6 toolchain (Xcode 16 or a
-Swift.org toolchain).
+Without `--adhoc`, the script uses a signing identity from the keychain when
+one is available. `--developer-id` makes a real identity mandatory. Ad-hoc
+builds cannot use the privileged helper; use compatible app/helper signatures
+for full-coverage and performance tests.
+
+The test suite has three targets:
+
+- `MacPerfMonitorCoreTests`: readers, sampling, analysis, storage, and retention.
+
+- `MacPerfMonitorIPCTests`: the helper contract and connection behavior.
+
+- `MacPerfMonitorTests`: native chart rendering, window and menu layout,
+  Explorer navigation, alert evidence, and export behavior.
+
+Native tests need a macOS graphical session. Some checks use synthetic fixtures;
+others need a running Mac or explicit opt-in data. A passing fixture does not
+replace a manual check of the signed app. See the commands in
+[Explorer](docs/explorer-design.md) and [Adaptive alerts](docs/adaptive-alerts.md)
+for native previews and read-only history replay.
+
+For Ask, the area summaries and question planning are ordinary unit tests:
+
+```sh
+swift test --filter 'AskBrief|AskPlan'
+```
+
+The model's answers are checked by hand on a Mac with macOS 27 and Apple
+Intelligence turned on. The evaluation runs scripted questions against fixed
+area summaries and prints each plan and answer for review. It uses no recorded
+history and changes nothing:
+
+```sh
+"build/Mac Performance Monitor.app/Contents/MacOS/Mac Performance Monitor" --ask-eval
+```
+
+Run it after changing a prompt, an area summary, or when Apple updates the
+model. Read the answers, not just whether it finished: a fluent answer can
+still misread its facts. See [docs/ask-redesign.md](docs/ask-redesign.md).
 
 ## Linting and formatting
+
+For the ANE accounting preview, run the focused reader, history, and display tests:
+
+```sh
+swift test --filter 'GPUAttributionTests|GPUHistoryTests|MetricCardPresentationTests'
+```
+
+The live sampler test needs macOS 27 and a ready Apple Intelligence model:
+
+```sh
+MACPERF_TEST_FOUNDATION_MODELS=1 swift test --filter GPUAttributionTests/testProductionSamplerReadsANE
+```
+
+Set `MACPERF_ANE_ARTIFACTS` to an output folder to capture the native ANE preview
+windows in the display test. This uses macOS screen capture and needs its usual
+permission. Without the variable, tests use view rendering only. No test writes
+to the user's history. See [ANE activity](docs/gpu-tab-design.md#ane-activity-preview-18-september-2026)
+for units, availability, and coverage limits.
+
+For ANE power, add the helper tests. They use an anonymous XPC listener and
+short-lived fixture processes, so the ordinary suite needs no root privileges:
+
+```sh
+swift test --filter 'HelperRoundTripTests|GPUAttributionTests|GPUHistoryTests|MetricCardPresentationTests'
+```
+
+To replay an existing native plist capture without starting a root sampler:
+
+```sh
+MACPERF_TEST_ANE_CAPTURE=/path/to/powermetrics-capture \
+swift test --filter HelperRoundTripTests/testRealASITopCaptureWhenExplicitlyProvided
+```
+
+The capture must include nonzero ANE energy and use powermetrics' NUL-separated
+plist format. The test prints only sample counts and peak watts. For the live
+signed-app check, install both updated binaries and enable Full Coverage. Check
+that ANE watts appear during inference and become unavailable when coverage is
+off, while ANE Time keeps working. No asitop process should be required.
 
 The project uses the Swift toolchain's built-in formatter, configured by
 [.swift-format](.swift-format). Continuous integration runs it in strict mode,
@@ -33,19 +109,18 @@ so please format before opening a pull request:
 swift format lint --strict --recursive Sources Tests Package.swift
 
 # Apply formatting in place
-swift format --in-place --recursive Sources Tests Package.swift
+swift format format --in-place --recursive Sources Tests Package.swift
 ```
 
-Formatting is the one thing CI has ever failed on here, so there is a hook that
-checks staged Swift files before a commit is made. Turn it on once per clone:
+A hook checks staged Swift files before a commit. Turn it on once per clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-`Scripts/install.sh` runs the same check before it builds, so a release can
-never be cut from code CI will reject. Set `SKIP_LINT=1` to bypass it for a
-local-only build.
+`Scripts/install.sh` runs the same lint check before building. It also changes
+the build number, signs and notarizes the app, and installs it in Applications.
+It is a maintainer test-build command, not a routine contributor build step.
 
 CI must stay green with no secrets and no code signing, so any fork gets a
 working build on the first try.
@@ -56,10 +131,14 @@ working build on the first try.
   `swiftLanguageModes: [.v5]` deliberately; keep new code compatible with it.
 - **Keep `MacPerfMonitorCore` free of SwiftUI.** The data layer (readers, models,
   sampling, persistence, analysis) must build and be testable headlessly. Put
-  pure analysis in `Analysis/` and database-querying code in `Persistence/`. The
-  app target depends only on `MacPerfMonitorCore`.
+  pure analysis in `Analysis/` and database-querying code in `Persistence/`.
+  App-only UI, IPC, and Sparkle integration belong outside Core.
 - **Test the data layer.** New analysis or persistence logic should come with
-  tests in `MacPerfMonitorCoreTests`. UI is verified manually.
+  tests in `MacPerfMonitorCoreTests`. Add native tests for UI behavior where
+  practical, then inspect the result in the app.
+- **Keep historical data honest.** Preserve timestamps, source intervals,
+  unknown readings, and stored bounds. Follow the
+  [chart standard](docs/dashboard-chart-standard.md) for Dashboard and Explorer.
 - **Logging.** Use the `AppLog` categories. Any log line you intend to rely on
   as evidence after the fact must be `.notice` (persisted), not `.info` (which
   ages out of the in-memory buffer).
@@ -68,16 +147,16 @@ working build on the first try.
 
 ## Writing style for docs and copy
 
-User-facing copy and Markdown documentation in this repository **avoid the em
-dash**. Use a colon, a pair of commas, parentheses, or two separate sentences
-instead. This keeps the prose plain and consistent. The rule applies to product
-copy and docs; ordinary code comments are exempt.
+Do not use em or en dashes in prose, UI copy, code comments, commit messages,
+or PR descriptions. Use commas, colons, parentheses, or separate sentences.
+Regular hyphens in compound words are fine. See [CLAUDE.md](CLAUDE.md).
 
 ## Translations
 
 Every language lives in one String Catalog, `Localizations/Localizable.xcstrings`.
-Adding a language is one file plus a single Swift `case` for the Settings picker,
-and partial translations are welcome: anything untranslated falls back to English.
+Adding a language also needs an entry in the Settings language picker. Partial
+new languages are welcome. English, Simplified Chinese, German, and French must
+keep full key coverage, even when individual translations await native review.
 
 See **[TRANSLATING.md](TRANSLATING.md)** for the full guide, including how
 plurals work (your language's own CLDR categories, not English's two), how to
@@ -88,6 +167,12 @@ keep format specifiers correct, and how to find hardcoded English with
 locally. It fails the build on a missing source value, a missing translation in
 a language declared complete, and any translation whose format specifiers do not
 match its key.
+
+`Scripts/check-string-coverage.py` runs in CI too and answers a question source
+text cannot. It uses the compiler to check keys that source scanning misses.
+For example, `Text("\(count) inside")` looks up `%lld inside`, not `%@ inside`.
+Add missing UI copy to the catalog. Only language-independent strings belong
+in the script's `NOT_TRANSLATED` allowlist. Keep a reason beside each such entry.
 
 Compiled `.lproj` directories are build output produced by `Scripts/bundle.sh`.
 They are not in the repository and must not be committed.
@@ -112,18 +197,35 @@ leaves their state alone for you to decide.
 ### Strings that need a key of their own
 
 Some keys are longer than the text they display, because English reuses one word
-where another language needs two. `"Low Power Mode on"` displays "On". Reach for
-this whenever a short generic word (`Free`, `Other`, `System`, `Scan`) would
-otherwise have to carry two different meanings, and give the catalog an explicit
-English value. `check-localization.py` fails the build if a key has no
-source-language value, which is what stops the key itself leaking to the screen.
+where another language needs two. `"Low Power Mode on"` displays "On". Use distinct
+keys when a short word has different meanings in different views. Give each
+key an explicit English value. The source-language check prevents internal key
+names from appearing in the interface.
 
 ### Crowdin
 
-`crowdin.yml` configures the project's Crowdin integration. Crowdin reads and
-writes the catalog directly and opens a pull request on an `l10n_` branch; it
-never commits to the default branch. `multilingual: true` is load-bearing:
-without it Crowdin splits the catalog into one file per language.
+Translators can use [Crowdin](https://crowdin.com/project/mac-performance-monitor).
+The settings in `crowdin.yml` keep translations in one catalog. Crowdin opens
+PRs from `l10n_main`, rather than writing to the default branch.
+Keep `multilingual: true` so it does not split the catalog by language.
+Keep `append_commit_message: false` so its commits do not skip CI.
+
+Allow imports from the repository and translations that match the source.
+The latter matters for terms such as CPU and USB. Otherwise Crowdin may report
+those entries as missing. Add new languages to both Crowdin and `AppLanguage`.
+Add a language to `COMPLETE_LANGUAGES` only when it has full key coverage.
+Keep AI-generated languages in `AppLanguage.machineTranslated` until native
+review is complete. That list controls the notice in Settings.
+
+Resolve catalog conflicts by key and language. Keep current source keys and
+English values from the target branch, and preserve reviewed translations from
+Crowdin. Do not take either catalog wholesale: that can discard new Explorer
+and alert strings or overwrite a translator's corrections. Check the diff,
+run both coverage checks, and compile the catalog before merging.
+
+Confirm that each Crowdin PR keeps the Explorer and alert keys now on `main`.
+Complete coverage does not mean a native speaker has reviewed the wording.
+[TRANSLATING.md](TRANSLATING.md) explains the review status.
 
 ## Submitting changes
 
@@ -134,6 +236,11 @@ without it Crowdin splits the catalog into one file per language.
    user-visible.
 5. Open a pull request using the template, describing what changed and why, and
    how you verified it.
+
+Release preparation and publishing are separate from normal contribution work.
+Do not run `Scripts/deploy.sh` as a validation step: it can change versions,
+install the app, upload assets, and make a release public.
+Maintainers should follow the [release checklist](docs/release-checklist.md).
 
 By contributing, you agree that your contributions are licensed under the
 project's [MIT License](LICENSE).

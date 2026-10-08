@@ -175,7 +175,7 @@ final class CombinedMenuBarConfiguration: ObservableObject {
             defaults.object(forKey: Self.alarmMarkerDefaultsKey) as? Bool ?? true
         focusedMetric =
             savedFocus.flatMap { loadedMetrics.contains($0) ? $0 : nil }
-            ?? loadedMetrics[0]
+            ?? loadedMetrics.first ?? .pressure
         persistSelection()
     }
 
@@ -191,7 +191,7 @@ final class CombinedMenuBarConfiguration: ObservableObject {
             guard selectedMetrics.count > 1 else { return }
             selectedMetrics.removeAll { $0 == metric }
             if focusedMetric == metric {
-                focusedMetric = selectedMetrics[0]
+                focusedMetric = selectedMetrics.first ?? .pressure
             }
         }
         persistSelection()

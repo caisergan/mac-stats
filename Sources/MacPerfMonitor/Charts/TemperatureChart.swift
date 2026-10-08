@@ -25,32 +25,102 @@ extension ThermalPressureState {
 
 /// CPU and GPU die temperature over the selected window. The thermal fields
 /// are optional (nil marks a tick that did not read the SMC), so each series
-/// carries only the points that have a value: `TrendChart`'s gap splitting
+/// carries only the points that have a value: the chart's gap splitting
 /// leaves unsampled stretches blank instead of drawing a misleading 0 degree
-/// floor. On aggregate ranges the points already carry the bucket max, so the
-/// line is "how hot did it get", never a smoothed average.
+/// floor. The line follows each bucket's maximum, never a mean, because a
+/// thermal spike is the event worth seeing, and the band behind it shows how
+/// far the readings ranged below that (docs/chart-rules.md, rule 2). On the
+/// stored ranges the rows already carry the bucket maximum.
 struct TemperatureChart: View {
     let points: [SystemHistoryPoint]
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
     /// Hovering the plot pins a marker and reads out both dies at that sample.
-    var scrubbable = false
+    var scrubbable = true
 
-    /// The scrubbed point reported by `TrendChart`, nil when the pointer
-    /// leaves. Only its time is used: the read-out quotes both series at that
-    /// sample, which the chart's own single-value read-out cannot do.
-    @State private var scrubPoint: TrendScrubPoint?
+    static func statisticsModel(
+        points: [SystemHistoryPoint], xDomain: ClosedRange<Date>?
+    ) -> TrendModel {
+        func column(
+            reading: (SystemHistoryPoint) -> Double?, average: (SystemHistoryPoint) -> Double?,
+            minimum: (SystemHistoryPoint) -> Double?, count: (SystemHistoryPoint) -> Int?
+        ) -> LiveColumn {
+            // Plotted in the person's temperature unit, so the axis lands on
+            // round numbers there.
+            let convert = TemperatureFormat.converter()
+            return LiveColumn(
+                times: points.map { $0.date.timeIntervalSinceReferenceDate }[...],
+                values: points.map { point in
+                    (point.bucketDuration > 0 ? average(point) : reading(point)).map(convert)
+                        ?? .nan
+                }[...],
+                highs: points.map { reading($0).map(convert) ?? .nan }[...],
+                lows: points.map { point in
+                    (point.bucketDuration > 0 ? minimum(point) : reading(point)).map(convert)
+                        ?? .nan
+                }[...],
+                weights: points.map { point in
+                    if point.bucketDuration == 0 { return reading(point) == nil ? 0 : 1 }
+                    return count(point).map(Double.init) ?? .nan
+                }[...],
+                durations: points.map(\.bucketDuration)[...])
+        }
+        let cpu = column(
+            reading: { $0.cpuDieC }, average: { $0.cpuDieAverageC },
+            minimum: { $0.minima?.cpuDieC }, count: { $0.cpuDieSampleCount })
+        let gpu = column(
+            reading: { $0.gpuDieC }, average: { $0.gpuDieAverageC },
+            minimum: { $0.minima?.gpuDieC }, count: { $0.gpuDieSampleCount })
+        var model = TrendModel()
+        model.series = [
+            TrendSurfaceSeries(column: cpu, color: ThermalStyle.cpu, name: t("CPU die")),
+            TrendSurfaceSeries(column: gpu, color: ThermalStyle.gpu, name: t("GPU die")),
+        ]
+        model.xDomain = xDomain
+        let source = points.map(\.bucketDuration).max() ?? 0
+        let span = xDomain.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 300
+        model.statisticsInterval = ChartStatistics.interval(span: span, minimum: source)
+        model.gapThreshold = ChartGap.threshold(
+            expectedSpacing: max(5, SamplerModel.configuredHighResInterval()))
+        let bounds = [cpu, gpu].flatMap { column in
+            Array(column.values) + Array(column.highs ?? []) + Array(column.lows ?? [])
+        }.filter(\.isFinite)
+        if let low = bounds.min(), let high = bounds.max() {
+            model.yDomain = ChartDomain.fitted(
+                min: low, max: high, minimumSpan: 30, padding: 5, floor: 0)
+        } else {
+            model.yDomain = TemperatureFormat.display(20)...TemperatureFormat.display(100)
+        }
+        model.yFormat = { TemperatureFormat.label($0, fractionDigits: 1) }
+        model.accessibilityLabel = "CPU and GPU die temperatures"
+        model.accessibilityValue =
+            "Average and observed temperature range. Missing sensor readings remain gaps."
+        return model
+    }
 
+    /// In the person's temperature unit (`TemperatureFormat`).
     private var cpuPoints: [TrendPoint] {
-        points.compactMap { point in
-            point.cpuDieC.map { TrendPoint(date: point.date, value: $0) }
+        let convert = TemperatureFormat.converter()
+        return points.compactMap { p in
+            p.cpuDieC.map { TrendPoint(date: p.date, value: convert($0)) }
         }
     }
 
     private var gpuPoints: [TrendPoint] {
-        points.compactMap { point in
-            point.gpuDieC.map { TrendPoint(date: point.date, value: $0) }
+        let convert = TemperatureFormat.converter()
+        return points.compactMap { p in
+            p.gpuDieC.map { TrendPoint(date: p.date, value: convert($0)) }
         }
+    }
+
+    /// The spacing of one drawn point, taken from the range being shown rather
+    /// than from the data (which would move with every sample). It sizes the
+    /// gap threshold: on the stored ranges a row a minute or an hour apart is
+    /// still one series.
+    private var pointSpacing: Double {
+        guard let xDomain else { return 0 }
+        let span = xDomain.upperBound.timeIntervalSince(xDomain.lowerBound)
+        return span > 0 ? span / 120 : 0
     }
 
     private var accessibilitySummary: String {
@@ -69,80 +139,40 @@ struct TemperatureChart: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            TrendChart(
-                series: [
-                    TrendSeries(points: cpuPoints, color: ThermalStyle.cpu, filled: true),
-                    TrendSeries(
-                        points: gpuPoints, color: ThermalStyle.gpu, filled: false, lineWidth: 1.8),
-                ],
-                xDomain: xDomain,
-                yDomain: temperatureDomain,
-                yFormat: { Self.degrees($0) },
-                showsTimeAxis: showsTimeAxis,
-                scrubbable: scrubbable,
-                scrubReporting: { scrubPoint = $0 },
-                scrubReadout: false
-            )
-            if scrubbable { scrubReadout }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Die temperature trend")
-        .accessibilityValue(accessibilitySummary)
+        chart
+            .accessibilityLabel("Die temperature trend")
+            .accessibilityValue(accessibilitySummary)
     }
 
-    /// Floating read-out beside the scrub marker, placed with the same geometry
-    /// `TrendChart` draws the marker from so the card tracks it exactly. Both
-    /// dies are listed, because the marker alone cannot say which line it sits
-    /// on.
-    @ViewBuilder private var scrubReadout: some View {
-        TrendScrubReadout(
-            point: scrubPoint,
-            geometry: TrendChartGeometry(leftGutter: 38, showsTimeAxis: showsTimeAxis),
-            inset: 52
-        ) { point in
-            if let reading = reading(at: point.date) {
-                ChartScrubCard(date: reading.date) {
-                    if let cpu = reading.cpuDieC {
-                        ChartScrubRow(
-                            color: ThermalStyle.cpu, name: "CPU", value: Self.degrees(cpu))
-                    }
-                    if let gpu = reading.gpuDieC {
-                        ChartScrubRow(
-                            color: ThermalStyle.gpu, name: "GPU", value: Self.degrees(gpu))
-                    }
-                }
-            }
-        }
+    var chart: TrendChart {
+        TrendChart(
+            series: [
+                TrendSeries(
+                    points: cpuPoints, color: ThermalStyle.cpu, reduction: .maximum,
+                    name: t("CPU die")),
+                TrendSeries(
+                    points: gpuPoints, color: ThermalStyle.gpu, lineWidth: 1.8,
+                    reduction: .maximum, name: t("GPU die")),
+            ],
+            xDomain: xDomain,
+            yDomain: temperatureDomain,
+            yFormat: { TemperatureFormat.label($0) },
+            showsTimeAxis: showsTimeAxis,
+            gapThreshold: ChartGap.threshold(
+                expectedSpacing: max(pointSpacing, SamplerModel.configuredHighResInterval())),
+            scrubbable: scrubbable
+        )
     }
 
-    /// The sample the marker sits on: the nearest one that read the SMC at all,
-    /// so scrubbing across a gap still quotes a real reading.
-    private func reading(at date: Date) -> SystemHistoryPoint? {
-        var best: SystemHistoryPoint?
-        var bestDelta = Double.greatestFiniteMagnitude
-        for point in points where point.cpuDieC != nil || point.gpuDieC != nil {
-            let delta = abs(point.date.timeIntervalSince(date))
-            if delta < bestDelta {
-                bestDelta = delta
-                best = point
-            }
-        }
-        return best
-    }
-
-    /// Whole degrees, matching the axis labels and the status line beneath.
-    static func degrees(_ value: Double) -> String { String(format: "%.0f°C", value) }
-
-    /// A stable floor-to-headroom domain: starting the axis at 0 wastes half
-    /// the plot (die sensors never read near 0), while a tight auto-fit makes
-    /// idle noise look dramatic. 20 to a rounded-up peak keeps small wiggles
-    /// small and real spikes visible.
+    /// Fit the readings rather than pinning the axis to a fixed 20 degrees and a
+    /// rounded-up peak. That was safe but spent most of the plot on temperatures
+    /// a die never reaches: sensors sitting between 60 and 90 drew a flat ribbon
+    /// through the middle. The 30 degree minimum span is what stops the opposite
+    /// problem, a degree of idle noise filling the chart.
     private var temperatureDomain: ClosedRange<Double>? {
         let values = cpuPoints.map(\.value) + gpuPoints.map(\.value)
-        guard let peak = values.max() else { return nil }
-        let top = max(60, (peak / 10).rounded(.up) * 10 + 10)
-        return 20...top
+        guard let lo = values.min(), let hi = values.max() else { return nil }
+        return ChartDomain.fitted(min: lo, max: hi, minimumSpan: 30, padding: 5, floor: 0)
     }
 }
 
@@ -153,7 +183,7 @@ struct FanChart: View {
     var xDomain: ClosedRange<Date>? = nil
     var showsTimeAxis = false
     /// Hovering the plot pins a marker and reads out the sample under it.
-    var scrubbable = false
+    var scrubbable = true
 
     private var fanPoints: [TrendPoint] {
         points.compactMap { point in
@@ -170,9 +200,15 @@ struct FanChart: View {
     }
 
     var body: some View {
+        chart
+            .accessibilityLabel("Fan speed trend")
+            .accessibilityValue(accessibilitySummary)
+    }
+
+    var chart: TrendChart {
         TrendChart(
             series: [
-                TrendSeries(points: fanPoints, color: ThermalStyle.fan, filled: true)
+                TrendSeries(points: fanPoints, color: ThermalStyle.fan, reduction: .maximum)
             ],
             xDomain: xDomain,
             yFormat: { t("%@ rpm", String(format: "%.0f", max($0, 0))) },
@@ -180,7 +216,5 @@ struct FanChart: View {
             scrubbable: scrubbable,
             leftGutter: 56
         )
-        .accessibilityLabel("Fan speed trend")
-        .accessibilityValue(accessibilitySummary)
     }
 }

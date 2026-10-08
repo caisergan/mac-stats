@@ -1,9 +1,53 @@
+import AppKit
 import MacPerfMonitorCore
 import SwiftUI
 
-enum MainWindowTab: Hashable {
+/// The main window's size limits. The window's only drag handle is the empty
+/// toolbar beside the tab strip. On macOS 26 and later the strip gives every tab
+/// the width of the widest title and never shrinks: about 820 pt in English but
+/// about 1,135 pt in French, where "Tableau de bord" sets every segment. When the
+/// window is too narrow for the strip, the traffic lights and the trailing
+/// buttons, nothing is left to grab and the window cannot be dragged at all,
+/// which is how it always opened at the old 980 pt default. So the minimum is
+/// measured from the localized titles. A language change relaunches the app, so
+/// measuring once is enough.
+enum MainWindowSize {
+    static let minimumHeight: CGFloat = 520
+    static let defaultHeight: CGFloat = 720
+
+    static let minimumWidth: CGFloat = {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let widest =
+            MainWindowTab.allCases.map {
+                ($0.title as NSString).size(withAttributes: [.font: font]).width
+            }.max() ?? 0
+        // Each segment is its title plus about 16 pt; the strip is centred, so
+        // each side needs the trailing buttons' ~100 pt plus room to grab.
+        let strip = CGFloat(MainWindowTab.allCases.count) * (widest + 16) + 4
+        return max(860, (strip + 2 * (100 + 40)).rounded(.up))
+    }()
+
+    static var defaultWidth: CGFloat { max(1280, minimumWidth + 100) }
+}
+
+enum MainWindowTab: Hashable, CaseIterable {
     case dashboard, processes, gpu, battery, network, diskUsage, hardware
     case analytics, insights, groups
+
+    var title: String {
+        switch self {
+        case .dashboard: return t("Dashboard")
+        case .processes: return t("Processes")
+        case .gpu: return t("GPU")
+        case .battery: return t("Energy")
+        case .network: return t("Network")
+        case .diskUsage: return t("Disk")
+        case .hardware: return t("Hardware")
+        case .analytics: return t("Explorer")
+        case .insights: return t("Insights")
+        case .groups: return t("Groups")
+        }
+    }
 }
 
 /// The main window's four tabs: Dashboard (pressure timeline, taxonomy, swap,
@@ -21,8 +65,15 @@ struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var helper: HelperManager
     @EnvironmentObject private var loginItem: LoginItemManager
+    @EnvironmentObject private var monitor: MonitorSelection
 
-    @State private var tab: MainWindowTab = .dashboard
+    @State private var navigation = TabNavigation()
+    /// The selected tab. Every assignment bumps `navigation.generation`, which
+    /// `TabGate` needs to tell a re-selected tab from one it has just hidden.
+    private var tab: MainWindowTab {
+        get { navigation.tab }
+        nonmutating set { navigation.tab = newValue }
+    }
 
     /// The Processes tab's selection, hoisted here so it survives tab switches:
     /// `TabGate` unmounts an inactive tab's content entirely, which would reset
@@ -32,62 +83,86 @@ struct ContentView: View {
     /// Lives above `TabGate`, so switching tabs does not discard an open trace.
     /// Closing the main window still unmounts `ContentView` and releases it.
     @State private var importedTrace: ImportedTrace?
+    @State private var explorer = DataExplorerModel(preferences: .standard)
+    @State private var investigationRevision = 0
+    /// The temperature unit, so the pages rebuild in the new unit when it
+    /// changes: in Settings, or in System Settings while the app runs. Charts
+    /// convert their points as they are built and the Hardware inventory is
+    /// captured text, so a page left mounted would mix the two units.
+    @AppStorage(TemperatureFormat.defaultsKey) private var temperatureUnit =
+        TemperatureUnitChoice.system.rawValue
+    @State private var localeRevision = 0
 
     var body: some View {
-        TabView(selection: $tab) {
-            TabGate(isActive: tab == .dashboard) { DashboardView() }
-                .tabItem { Label("Dashboard", systemImage: "gauge.with.dots.needle.50percent") }
-                .tag(MainWindowTab.dashboard)
+        TabView(selection: $navigation.tab) {
+            TabGate(isActive: tab == .dashboard, generation: navigation.generation) {
+                DashboardView()
+            }
+            .tabItem {
+                Label(
+                    MainWindowTab.dashboard.title,
+                    systemImage: "gauge.with.dots.needle.50percent")
+            }
+            .tag(MainWindowTab.dashboard)
 
-            TabGate(isActive: tab == .processes) {
+            TabGate(isActive: tab == .processes, generation: navigation.generation) {
                 ProcessesTab(selection: $processSelection, didAutoSelect: $didAutoSelectProcess)
             }
-            .tabItem { Label("Processes", systemImage: "list.bullet.rectangle") }
+            .tabItem { Label(MainWindowTab.processes.title, systemImage: "list.bullet.rectangle") }
             .tag(MainWindowTab.processes)
 
-            TabGate(isActive: tab == .gpu) { GPUView() }
-                .tabItem { Label("GPU", systemImage: "display") }
+            TabGate(isActive: tab == .gpu, generation: navigation.generation) { GPUView() }
+                .tabItem { Label(MainWindowTab.gpu.title, systemImage: "display") }
                 .tag(MainWindowTab.gpu)
 
-            TabGate(isActive: tab == .battery) { BatteryView() }
-                .tabItem { Label("Energy", systemImage: "bolt.fill") }
+            TabGate(isActive: tab == .battery, generation: navigation.generation) { BatteryView() }
+                .tabItem { Label(MainWindowTab.battery.title, systemImage: "bolt.fill") }
                 .tag(MainWindowTab.battery)
 
-            TabGate(isActive: tab == .network) { NetworkView() }
-                .tabItem { Label("Network", systemImage: "network") }
+            TabGate(isActive: tab == .network, generation: navigation.generation) { NetworkView() }
+                .tabItem { Label(MainWindowTab.network.title, systemImage: "network") }
                 .tag(MainWindowTab.network)
 
-            TabGate(isActive: tab == .diskUsage) { DiskUsageView() }
-                .tabItem { Label("Disk", systemImage: "internaldrive") }
-                .tag(MainWindowTab.diskUsage)
-
-            TabGate(isActive: tab == .hardware) { HardwareView() }
-                .tabItem { Label("Hardware", systemImage: "macbook") }
-                .tag(MainWindowTab.hardware)
-
-            TabGate(isActive: tab == .analytics) {
-                AnalyticsView(imported: $importedTrace)
+            TabGate(isActive: tab == .diskUsage, generation: navigation.generation) {
+                DiskUsageView()
             }
-            .tabItem { Label("Analytics", systemImage: "chart.xyaxis.line") }
+            .tabItem { Label(MainWindowTab.diskUsage.title, systemImage: "internaldrive") }
+            .tag(MainWindowTab.diskUsage)
+
+            TabGate(isActive: tab == .hardware, generation: navigation.generation) {
+                HardwareView()
+            }
+            .tabItem { Label(MainWindowTab.hardware.title, systemImage: "macbook") }
+            .tag(MainWindowTab.hardware)
+
+            TabGate(isActive: tab == .analytics, generation: navigation.generation) {
+                AnalyticsView(explorer: explorer, imported: $importedTrace)
+                    .id(investigationRevision)
+            }
+            .tabItem {
+                Label(MainWindowTab.analytics.title, systemImage: "waveform.path.ecg.rectangle")
+            }
             .tag(MainWindowTab.analytics)
 
-            TabGate(isActive: tab == .insights) { InsightsView() }
-                .tabItem { Label("Insights", systemImage: "lightbulb") }
-                .tag(MainWindowTab.insights)
+            TabGate(isActive: tab == .insights, generation: navigation.generation) {
+                InsightsView()
+            }
+            .tabItem { Label(MainWindowTab.insights.title, systemImage: "lightbulb") }
+            .tag(MainWindowTab.insights)
 
-            TabGate(isActive: tab == .groups) { GroupsView() }
-                .tabItem { Label("Groups", systemImage: "square.stack.3d.up") }
+            TabGate(isActive: tab == .groups, generation: navigation.generation) { GroupsView() }
+                .tabItem { Label(MainWindowTab.groups.title, systemImage: "square.stack.3d.up") }
                 .tag(MainWindowTab.groups)
         }
-        .frame(minWidth: 860, minHeight: 520)
-        // A global refresh-rate control in the toolbar, so it is reachable from
-        // every tab and changing it applies app-wide. Self-contained (@AppStorage),
-        // so it does not pull SamplerModel observation into this tab host.
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                RefreshIntervalControl()
-            }
+        .id("\(temperatureUnit)-\(localeRevision)")
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)
+        ) { _ in
+            localeRevision &+= 1
+            HardwareExplorerModel.shared.refreshIfCaptured()
         }
+        .onChange(of: temperatureUnit) { _, _ in HardwareExplorerModel.shared.refreshIfCaptured() }
+        .frame(minWidth: MainWindowSize.minimumWidth, minHeight: MainWindowSize.minimumHeight)
         .forceQuitConfirmation(target: $appState.pendingForceQuit)
         .sheet(item: $appState.codesignTarget) { target in
             CodesignSheet(target: target)
@@ -137,7 +212,10 @@ struct ContentView: View {
                 tab = .network
                 appState.showNetworkTab = false
             }
+            consumeAlertInvestigation()
+            consumeExplorerFocus()
         }
+        .onChange(of: appState.explorerFocus) { _, _ in consumeExplorerFocus() }
         .onChange(of: appState.navigationTarget) { _, newValue in
             if newValue != nil { tab = .processes }
         }
@@ -162,7 +240,39 @@ struct ContentView: View {
         .onChange(of: appState.pendingTraceURL) { _, url in
             if url != nil { tab = .analytics }
         }
+        .onChange(of: appState.alertInvestigation) { _, _ in consumeAlertInvestigation() }
     }
+
+    private func consumeExplorerFocus() {
+        guard let link = appState.explorerFocus else { return }
+        appState.explorerFocus = nil
+        importedTrace = nil
+        investigationRevision &+= 1
+        for identity in monitor.identities { monitor.remove(identity) }
+        for identity in link.processes { monitor.add(identity) }
+        explorer.focus(link)
+        tab = .analytics
+    }
+
+    private func consumeAlertInvestigation() {
+        guard let request = appState.alertInvestigation else { return }
+        appState.alertInvestigation = nil
+        appState.navigationTarget = nil
+        importedTrace = nil
+        investigationRevision &+= 1
+        for identity in monitor.identities { monitor.remove(identity) }
+        for identity in request.identities { monitor.add(identity) }
+        explorer.investigate(request)
+        tab = .analytics
+    }
+}
+
+/// The main window's tab selection, plus a counter bumped on every change.
+private struct TabNavigation {
+    var tab: MainWindowTab = .dashboard {
+        didSet { if tab != oldValue { generation &+= 1 } }
+    }
+    private(set) var generation = 0
 }
 
 /// Mounts a tab's content only while that tab is selected. macOS's TabView
@@ -170,16 +280,34 @@ struct ContentView: View {
 /// gate all four tabs' charts re-render — and their reload timers keep firing —
 /// on every 2-second sample even while invisible, which was the largest single
 /// contributor to the app's own memory footprint (chart layer backing) and CPU.
+///
+/// `isActive` alone is not enough on macOS 26 and later: TabView stops
+/// applying updates to a tab once it is hidden, so the tab being left never
+/// receives `isActive == false` and its page stayed mounted and live (observing
+/// the model, feeding its charts, re-evaluating its body every sample) for as
+/// long as the window was open. Every visited tab added its cost; a session
+/// that had opened Processes, Dashboard and Insights spent about a fifth of the
+/// main thread on those pages while another tab was showing. `onDisappear`
+/// still reaches the hidden tab and its state change is applied, so the gate
+/// also hides its content there. It records the generation it was hidden at,
+/// so a later selection (always a newer generation, delivered because the tab
+/// is then visible) mounts the content on its first frame with no blank flash.
 private struct TabGate<Content: View>: View {
     let isActive: Bool
+    let generation: Int
     @ViewBuilder let content: () -> Content
+    @State private var hiddenAtGeneration: Int?
 
     var body: some View {
-        if isActive {
-            content()
-        } else {
-            Color(nsColor: .windowBackgroundColor)
+        ZStack {
+            if isActive && hiddenAtGeneration != generation {
+                content()
+            } else {
+                Color(nsColor: .windowBackgroundColor)
+            }
         }
+        .onAppear { hiddenAtGeneration = nil }
+        .onDisappear { hiddenAtGeneration = generation }
     }
 }
 
