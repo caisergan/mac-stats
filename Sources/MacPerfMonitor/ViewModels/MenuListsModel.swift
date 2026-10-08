@@ -36,6 +36,11 @@ final class MenuListsModel: ObservableObject {
     /// Top processes by kernel-attributed read + write throughput.
     @Published private(set) var topDisk: [ProcessSample] = []
     @Published private(set) var topGPU: [ProcessSample] = []
+    /// The memory and CPU lists grouped by app (helpers under their app),
+    /// apps ranked by their total and members sorted highest first. Refreshed
+    /// alongside the flat lists so the popover's By App switch is instant.
+    @Published private(set) var topFootprintApps: [AppProcessGroup] = []
+    @Published private(set) var topCPUApps: [AppProcessGroup] = []
     /// Whether a scan has ranked the GPU list since it was last cleared. An
     /// empty list after a scan means nothing is drawing (every app that ever
     /// touched Metal keeps a context, so the list holds only active users),
@@ -58,10 +63,20 @@ final class MenuListsModel: ObservableObject {
         }
     }
 
+    /// Publish the by-app version of a list (memory and CPU only).
+    func updateApps(_ kind: MenuListKind, with groups: [AppProcessGroup]) {
+        switch kind {
+        case .footprint: if groups != topFootprintApps { topFootprintApps = groups }
+        case .cpu: if groups != topCPUApps { topCPUApps = groups }
+        default: break
+        }
+    }
+
     /// Drop a list too old to trust (a popover reopened after a long gap) so
     /// its panel shows "Sampling" until the next scan lands.
     func clear(_ kind: MenuListKind) {
         update(kind, with: [])
+        updateApps(kind, with: [])
         if kind == .gpu, gpuListScanned { gpuListScanned = false }
     }
 }

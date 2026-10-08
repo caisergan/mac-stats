@@ -1,6 +1,156 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%1$@ of %2$@ processes in “%3$@” stopped." : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ von %2$@ Prozessen in „%3$@“ wurden beendet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ of %2$@ processes in “%3$@” stopped."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ processus sur %2$@ de « %3$@ » ont été arrêtés."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%3$@” 的 %2$@ 个进程中已停止 %1$@ 个。"
+          }
+        }
+      }
+    },
+    "%@ did not exit. Some processes are protected by macOS, or are stuck waiting on the system and exit only when that finishes." : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ wurden nicht beendet. Manche Prozesse sind von macOS geschützt oder warten auf das System und enden erst, wenn es fertig ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ did not exit. Some processes are protected by macOS, or are stuck waiting on the system and exit only when that finishes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ne se sont pas arrêtés. Certains processus sont protégés par macOS, ou attendent le système et ne s’arrêtent qu’une fois celui-ci terminé."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 个未退出。有些进程受 macOS 保护，或正在等待系统操作，只有在其完成后才会退出。"
+          }
+        }
+      }
+    },
+    "%@ more processes" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ weitere Prozesse"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ more processes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ processus de plus"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %@ 个进程"
+          }
+        }
+      }
+    },
+    "%@: %@ processes" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@ Prozesse"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@ processes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ : %2$@ processus"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@ 个进程"
+          }
+        }
+      }
+    },
+    "1 more process" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 weiterer Prozess"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 more process"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 processus de plus"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 1 个进程"
+          }
+        }
+      }
+    },
     "a small share, not the cause" : {
       "comment" : "Ask About This Mac. AI-generated translations; native-speaker review pending.",
       "extractionState" : "manual",
@@ -31,6 +181,306 @@
         }
       }
     },
+    "Actions for this app" : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktionen für diese App"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actions for this app"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actions pour cette app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此应用的操作"
+          }
+        }
+      }
+    },
+    "App actions" : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App-Aktionen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App actions"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actions de l’app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用操作"
+          }
+        }
+      }
+    },
+    "By App" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach App"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By App"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Par app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按应用"
+          }
+        }
+      }
+    },
+    "Collapsed" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eingeklappt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapsed"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réduit"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收起"
+          }
+        }
+      }
+    },
+    "Couldn’t force quit everything" : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht alles konnte sofort beendet werden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t force quit everything"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de forcer la fermeture de tout"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法强制退出全部进程"
+          }
+        }
+      }
+    },
+    "Expanded" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausgeklappt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expanded"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Développé"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已展开"
+          }
+        }
+      }
+    },
+    "Force quit %1$@ and its %2$@ processes?" : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ und seine %2$@ Prozesse sofort beenden?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Force quit %1$@ and its %2$@ processes?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forcer %1$@ et ses %2$@ processus à quitter ?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制退出 %1$@ 及其 %2$@ 个进程？"
+          }
+        }
+      }
+    },
+    "Force Quit “%@”…" : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ sofort beenden…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Force Quit “%@”…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forcer « %@ » à quitter…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制退出“%@”…"
+          }
+        }
+      }
+    },
+    "Group by app" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach App gruppieren"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Group by app"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regrouper par app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按应用分组"
+          }
+        }
+      }
+    },
+    "Group processes by app" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prozesse nach App gruppieren"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Group processes by app"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regrouper les processus par app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按应用分组进程"
+          }
+        }
+      }
+    },
     "It usually passes on its own. If the Mac stays this busy for hours, restarting it helps." : {
       "comment" : "Ask About This Mac. AI-generated translations; native-speaker review pending.",
       "extractionState" : "manual",
@@ -57,6 +507,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这通常会自行缓解。如果 Mac 持续这么忙好几个小时，重新启动会有帮助。"
+          }
+        }
+      }
+    },
+    "Layout" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Layout"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Layout"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposition"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "布局"
+          }
+        }
+      }
+    },
+    "List" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表"
+          }
+        }
+      }
+    },
+    "List shows every process. Hierarchy nests processes by which launched which. By App adds each helper to the app it belongs to." : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste zeigt jeden Prozess. Hierarchie ordnet Prozesse danach, welcher welchen gestartet hat. Nach App ordnet jeden Hilfsprozess der App zu, zu der er gehört."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List shows every process. Hierarchy nests processes by which launched which. By App adds each helper to the app it belongs to."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste affiche chaque processus. Hiérarchie imbrique les processus selon celui qui les a lancés. Par app rattache chaque processus auxiliaire à son app."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表显示每个进程。层级结构按启动关系嵌套进程。按应用将每个辅助进程归入其所属的应用。"
+          }
+        }
+      }
+    },
+    "macOS would not let %1$@ stop %2$@ of them. They are likely system processes or owned by another user. Turn on Full Coverage in Settings to stop processes as root." : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS hat %1$@ nicht erlaubt, %2$@ davon zu beenden. Wahrscheinlich sind es Systemprozesse oder sie gehören einem anderen Benutzer. Aktiviere Vollständige Abdeckung in den Einstellungen, um Prozesse als root zu beenden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS would not let %1$@ stop %2$@ of them. They are likely system processes or owned by another user. Turn on Full Coverage in Settings to stop processes as root."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS n’a pas laissé %1$@ en arrêter %2$@. Il s’agit probablement de processus système ou appartenant à un autre utilisateur. Activez la couverture complète dans les Réglages pour arrêter des processus en tant que root."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS 不允许 %1$@ 停止其中 %2$@ 个。它们可能是系统进程或属于其他用户。在设置中打开完整覆盖即可以 root 身份停止进程。"
           }
         }
       }
@@ -327,6 +897,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示这台 Mac 这部分的更多信息"
+          }
+        }
+      }
+    },
+    "Shows the processes in this app" : {
+      "comment" : "Process list grouped by app. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeigt die Prozesse dieser App"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the processes in this app"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiche les processus de cette app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示此应用中的进程"
+          }
+        }
+      }
+    },
+    "This sends SIGKILL (kill -9) to every process in the app. They stop at once without saving, so any unsaved work is lost." : {
+      "comment" : "Force quitting an app from the By App process list. AI-generated translations; native-speaker review pending.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dies sendet SIGKILL (kill -9) an jeden Prozess der App. Sie stoppen sofort ohne zu sichern, nicht gesicherte Arbeit geht verloren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This sends SIGKILL (kill -9) to every process in the app. They stop at once without saving, so any unsaved work is lost."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cela envoie SIGKILL (kill -9) à chaque processus de l’app. Ils s’arrêtent aussitôt sans enregistrer, tout travail non enregistré est perdu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这会向该应用的每个进程发送 SIGKILL（kill -9）。它们会立即停止且不保存，所有未保存的工作都会丢失。"
           }
         }
       }

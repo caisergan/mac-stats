@@ -168,6 +168,8 @@ public final class Sampler {
         var executablePath: String?
         var bundleID: String?
         var teamID: String?
+        /// Set at spawn and never changed, so read once (see `ProcessReader`).
+        var responsiblePID: Int32?
         var isTranslated: Bool?
         var architecture: Architecture
         /// Whether the (expensive) Team-ID code-sign lookup has actually run for
@@ -731,6 +733,7 @@ public final class Sampler {
                     executablePath: partial.executablePath,
                     bundleID: partial.bundleID,
                     teamID: codeSigningResolver.teamID(forExecutablePath: partial.executablePath),
+                    responsiblePID: partial.responsiblePID,
                     isTranslated: partial.isTranslated,
                     architecture: partial.architecture,
                     teamIDResolved: true)
@@ -748,6 +751,7 @@ public final class Sampler {
                 executablePath: path,
                 bundleID: bundleIDCache.bundleID(fromExecutablePath: path),
                 teamID: resolveTeam ? codeSigningResolver.teamID(forExecutablePath: path) : nil,
+                responsiblePID: processReader.responsiblePID(pid),
                 isTranslated: translated,
                 architecture: processReader.architecture(translated: translated),
                 teamIDResolved: resolveTeam)
@@ -758,6 +762,7 @@ public final class Sampler {
             timestamp: now,
             pid: pid,
             ppid: info.ppid,
+            responsiblePID: staticInfo.responsiblePID,
             name: info.name,
             executablePath: staticInfo.executablePath,
             bundleID: staticInfo.bundleID,

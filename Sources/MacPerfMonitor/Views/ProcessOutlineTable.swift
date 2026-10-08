@@ -25,6 +25,9 @@ struct ProcessOutlineTable: NSViewRepresentable {
     /// the array so an unchanged revision skips the reload.
     let revision: Int
     let showHierarchy: Bool
+    /// The By App layout: top-level rows are apps (`ProcessNode.isAppRow`),
+    /// which expand on click and are not selectable themselves.
+    var groupsByApp = false
     let leakingIDs: Set<ProcessIdentity>
     let terminatedIDs: Set<ProcessIdentity>
     @Binding var selection: Set<ProcessIdentity>
@@ -32,6 +35,9 @@ struct ProcessOutlineTable: NSViewRepresentable {
     /// The context menu for the rows a right-click lands on (the clicked row
     /// joins the selection first, as the SwiftUI table did).
     let menu: (Set<ProcessIdentity>) -> NSMenu?
+    /// The context menu for an app row (By App layout), which is not
+    /// selectable and so never reaches `menu`.
+    var appMenu: (ProcessNode) -> NSMenu? = { _ in nil }
     /// Dial-rate value patches for rows on screen (`SamplerModel.processValuesTick`):
     /// the cells update in place, with no SwiftUI involvement and no re-sort.
     var values: AnyPublisher<[ProcessIdentity: ProcessSample], Never> =
@@ -63,6 +69,8 @@ struct ProcessOutlineTable: NSViewRepresentable {
         outline.intercellSpacing = NSSize(width: 10, height: 2)
         outline.focusRingType = .none
         outline.autosaveTableColumns = false
+        outline.target = coordinator
+        outline.action = #selector(Coordinator.rowClicked(_:))
 
         for spec in columns {
             let column = NSTableColumn(identifier: spec.identifier.identifier)
@@ -89,6 +97,7 @@ struct ProcessOutlineTable: NSViewRepresentable {
         scrollView.drawsBackground = false
         coordinator.outlineView = outline
         coordinator.menu = menu
+        coordinator.appMenu = appMenu
         coordinator.onSelectionChange = { ids in
             if selection != ids { selection = ids }
         }
@@ -115,6 +124,7 @@ struct ProcessOutlineTable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.menu = menu
+        coordinator.appMenu = appMenu
         coordinator.onSelectionChange = { ids in
             if selection != ids { selection = ids }
         }
@@ -128,7 +138,7 @@ struct ProcessOutlineTable: NSViewRepresentable {
         coordinator.onVisibleRowsChange = onVisibleRowsChange
         coordinator.apply(
             rows: rows, revision: revision, showHierarchy: showHierarchy,
-            leakingIDs: leakingIDs, terminatedIDs: terminatedIDs)
+            groupsByApp: groupsByApp, leakingIDs: leakingIDs, terminatedIDs: terminatedIDs)
         coordinator.applySelection(selection)
         if let outline = coordinator.outlineView {
             let wanted = Self.sortDescriptors(for: sortOrder)
@@ -293,6 +303,7 @@ struct ProcessOutlineTable: NSViewRepresentable {
     final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
         weak var outlineView: NSOutlineView?
         var menu: ((Set<ProcessIdentity>) -> NSMenu?)?
+        var appMenu: ((ProcessNode) -> NSMenu?)?
         var onSelectionChange: ((Set<ProcessIdentity>) -> Void)?
         var onSortChange: (([KeyPathComparator<ProcessNode>]) -> Void)?
         var onVisibleRowsChange: (([pid_t]) -> Void)?
@@ -326,7 +337,12 @@ struct ProcessOutlineTable: NSViewRepresentable {
             pids.reserveCapacity(visible.length)
             if visible.length > 0 {
                 for row in visible.location..<(visible.location + visible.length) {
-                    if let item = outlineView.item(atRow: row) as? Item {
+                    guard let item = outlineView.item(atRow: row) as? Item else { continue }
+                    if item.node.isAppRow {
+                        // The app row's totals come from its members, so they
+                        // need live figures even while it is collapsed.
+                        pids.append(contentsOf: (item.children ?? []).map(\.node.process.pid))
+                    } else {
                         pids.append(item.node.process.pid)
                     }
                 }
@@ -348,13 +364,24 @@ struct ProcessOutlineTable: NSViewRepresentable {
                 item.node.process = sample
                 touched = true
             }
-            if touched { refreshVisibleCells(outlineView, columns: Self.valueColumns) }
+            guard touched else { return }
+            if appliedGroupsByApp == true {
+                for app in roots where app.node.isAppRow {
+                    guard let members = app.children,
+                        members.contains(where: { patches[$0.id] != nil })
+                    else { continue }
+                    app.node.process = ProcessNode.appRowSample(
+                        app.node.process, members: members.map(\.node.process))
+                }
+            }
+            refreshVisibleCells(outlineView, columns: Self.valueColumns)
         }
 
         private var roots: [Item] = []
         private var itemsByID: [ProcessIdentity: Item] = [:]
         private var appliedRevision: Int?
         private var appliedHierarchy: Bool?
+        private var appliedGroupsByApp: Bool?
         private var leakingIDs: Set<ProcessIdentity> = []
         private var terminatedIDs: Set<ProcessIdentity> = []
         /// Set while we change the selection ourselves, so the delegate echo is
@@ -371,17 +398,19 @@ struct ProcessOutlineTable: NSViewRepresentable {
         /// Hierarchy mode keys items by identity so expansion survives, and
         /// reloads; it is the opt-in mode.
         func apply(
-            rows: [ProcessNode], revision: Int, showHierarchy: Bool,
+            rows: [ProcessNode], revision: Int, showHierarchy: Bool, groupsByApp: Bool,
             leakingIDs: Set<ProcessIdentity>, terminatedIDs: Set<ProcessIdentity>
         ) {
             let stylingChanged =
                 leakingIDs != self.leakingIDs || terminatedIDs != self.terminatedIDs
-            let modeChanged = showHierarchy != appliedHierarchy
+            let modeChanged =
+                showHierarchy != appliedHierarchy || groupsByApp != appliedGroupsByApp
             guard revision != appliedRevision || modeChanged || stylingChanged else { return }
             self.leakingIDs = leakingIDs
             self.terminatedIDs = terminatedIDs
             appliedRevision = revision
             appliedHierarchy = showHierarchy
+            appliedGroupsByApp = groupsByApp
             guard let outlineView else { return }
 
             if showHierarchy {
@@ -497,11 +526,12 @@ struct ProcessOutlineTable: NSViewRepresentable {
                     process: process,
                     isLeaking: leakingIDs.contains(process.id),
                     descendantLeaking: hasLeakingDescendant(item),
-                    isTerminated: terminated)
+                    isTerminated: terminated,
+                    appMemberCount: item.node.appMemberCount)
             } else if let cell = view as? ValueCellView {
                 cell.configure(
                     column: columnID, process: process, isTerminated: terminated,
-                    badge: item.node.badge)
+                    badge: item.node.badge, isAppRow: item.node.isAppRow)
             }
         }
 
@@ -534,8 +564,27 @@ struct ProcessOutlineTable: NSViewRepresentable {
             outlineView.selectRowIndexes(indexes as IndexSet, byExtendingSelection: false)
         }
 
+        /// A click on an app row opens or closes it (app rows are not
+        /// selectable, so the click has nothing else to do).
+        @objc func rowClicked(_ sender: Any?) {
+            guard let outlineView, outlineView.clickedRow >= 0,
+                let item = outlineView.item(atRow: outlineView.clickedRow) as? Item,
+                item.node.isAppRow
+            else { return }
+            if outlineView.isItemExpanded(item) {
+                outlineView.collapseItem(item)
+            } else {
+                outlineView.expandItem(item)
+            }
+        }
+
         func contextMenu(for clickedRow: Int) -> NSMenu? {
             guard let outlineView else { return nil }
+            if clickedRow >= 0, let item = outlineView.item(atRow: clickedRow) as? Item,
+                item.node.isAppRow
+            {
+                return appMenu?(item.node)
+            }
             if clickedRow >= 0, !outlineView.selectedRowIndexes.contains(clickedRow) {
                 outlineView.selectRowIndexes(
                     IndexSet(integer: clickedRow), byExtendingSelection: false)
@@ -597,6 +646,20 @@ struct ProcessOutlineTable: NSViewRepresentable {
             return view
         }
 
+        /// App rows stand for several processes, so they never join the
+        /// selection (which drives the single-process inspector).
+        func outlineView(
+            _ outlineView: NSOutlineView,
+            selectionIndexesForProposedSelection proposed: IndexSet
+        ) -> IndexSet {
+            proposed.filteredIndexSet {
+                (outlineView.item(atRow: $0) as? Item)?.node.isAppRow != true
+            }
+        }
+
+        func outlineViewItemDidExpand(_ notification: Notification) { reportVisibleRows() }
+        func outlineViewItemDidCollapse(_ notification: Notification) { reportVisibleRows() }
+
         func outlineViewSelectionDidChange(_ notification: Notification) {
             guard !isApplyingSelection else { return }
             onSelectionChange?(selectedIDs())
@@ -611,6 +674,11 @@ struct ProcessOutlineTable: NSViewRepresentable {
             else { return "" }
             switch column {
             case .process:
+                if item.node.isAppRow {
+                    return t(
+                        "%@: %@ processes", item.node.process.displayName,
+                        String(item.node.appMemberCount))
+                }
                 if !leakingIDs.contains(item.id), hasLeakingDescendant(item) {
                     return t("A process started by this one looks like it's leaking memory.")
                 }
@@ -670,7 +738,8 @@ final class ProcessCellView: NSTableCellView {
 
     private var shownPath: String??
     private var shownName: String?
-    private var shownStyle: (leaking: Bool, warning: Bool, terminated: Bool, translated: Bool)?
+    private var shownStyle:
+        (leaking: Bool, warning: Bool, terminated: Bool, translated: Bool, members: Int)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -722,7 +791,8 @@ final class ProcessCellView: NSTableCellView {
     }
 
     func configure(
-        process: ProcessSample, isLeaking: Bool, descendantLeaking: Bool, isTerminated: Bool
+        process: ProcessSample, isLeaking: Bool, descendantLeaking: Bool, isTerminated: Bool,
+        appMemberCount: Int = 0
     ) {
         if shownPath != .some(process.executablePath) {
             shownPath = .some(process.executablePath)
@@ -730,12 +800,13 @@ final class ProcessCellView: NSTableCellView {
         }
         let style = (
             leaking: isLeaking, warning: !isTerminated && (isLeaking || descendantLeaking),
-            terminated: isTerminated, translated: process.isTranslated
+            terminated: isTerminated, translated: process.isTranslated, members: appMemberCount
         )
         let styleChanged =
             shownStyle.map {
                 $0.leaking != style.leaking || $0.warning != style.warning
                     || $0.terminated != style.terminated || $0.translated != style.translated
+                    || $0.members != style.members
             } ?? true
         if styleChanged || shownName != process.displayName {
             shownName = process.displayName
@@ -754,7 +825,14 @@ final class ProcessCellView: NSTableCellView {
         shownStyle = style
         icon.alphaValue = isTerminated ? 0.5 : 1
         warning.isHidden = !style.warning
-        if isTerminated {
+        if appMemberCount > 0 {
+            // An app row: how many processes it holds.
+            badge.isHidden = false
+            badge.stringValue = " \(appMemberCount) "
+            badge.textColor = .secondaryLabelColor
+            badge.layer?.backgroundColor =
+                NSColor.secondaryLabelColor.withAlphaComponent(0.14).cgColor
+        } else if isTerminated {
             badge.isHidden = false
             badge.stringValue = " \(t("Stopped")) "
             badge.textColor = .secondaryLabelColor
@@ -822,9 +900,9 @@ final class ValueCellView: NSTableCellView {
 
     func configure(
         column: ProcessOutlineTable.ColumnID, process: ProcessSample, isTerminated: Bool,
-        badge: String = ""
+        badge: String = "", isAppRow: Bool = false
     ) {
-        let text: String
+        var text: String
         var secondary = false
         switch column {
         case .gpu:
@@ -853,6 +931,8 @@ final class ValueCellView: NSTableCellView {
             secondary = true
         case .process: text = process.displayName
         }
+        // An app row has no single pid or architecture of its own.
+        if isAppRow, column == .pid || column == .arch { text = "" }
         if shownColumn != column {
             shownColumn = column
             let leftAligned = column == .arch || column == .category

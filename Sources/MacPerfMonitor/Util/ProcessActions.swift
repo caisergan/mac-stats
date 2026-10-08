@@ -396,6 +396,13 @@ struct ForceQuitConfirmation: ViewModifier {
         // dismissing, which made a denied kill (the common case for a process the
         // user does not own) fail silently with no feedback at all.
         DispatchQueue.main.async {
+            // The dialog may have been open for a while: if the process exited
+            // meanwhile, its pid can already belong to another process, which
+            // must not be the one killed. Check the start time right before.
+            guard ProcessReader().isRunning(identity) else {
+                self.model.markTerminated(identity, lastSample: lastSample)
+                return
+            }
             switch ProcessActions.forceQuit(pid: pid) {
             case .success, .alreadyGone:
                 self.model.markTerminated(identity, lastSample: lastSample)
@@ -421,6 +428,10 @@ struct ForceQuitConfirmation: ViewModifier {
                     "macOS would not let %1$@ stop \u{201C}%2$@\u{201D}. It is likely a "
                         + "system process or owned by another user. Turn on Full Coverage in "
                         + "Settings to stop processes as root.", AppInfo.displayName, name)
+            return
+        }
+        guard ProcessReader().isRunning(identity) else {
+            model.markTerminated(identity, lastSample: lastSample)
             return
         }
         helper.forceQuit(pid: pid) { outcome in

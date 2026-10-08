@@ -247,6 +247,42 @@ public struct ProcessReader: Sendable {
         return String(cString: buffer)
     }
 
+    /// Whether the process `identity` names is still running: its pid exists,
+    /// carries the same start time (so a reused pid is a different process),
+    /// and is not a zombie (killed, waiting only for its parent to reap it).
+    /// Reads `kinfo_proc` through sysctl, which works for every user's
+    /// processes, so this holds for system processes too.
+    public func isRunning(_ identity: ProcessIdentity) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, identity.pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        let started = info.kp_proc.p_un.__p_starttime
+        let startTime = Self.startDate(
+            seconds: UInt64(started.tv_sec), microseconds: UInt64(started.tv_usec))
+        return startTime == identity.startTime && Int32(info.kp_proc.p_stat) != SZOMB
+    }
+
+    /// The pid macOS holds responsible for `pid`, the attribution Activity
+    /// Monitor uses (an app for its XPC services, a terminal for its shells).
+    /// Readable at user level. Nil when the call is unavailable or fails.
+    public func responsiblePID(_ pid: pid_t) -> pid_t? {
+        guard let lookup = Self.responsibilityLookup else { return nil }
+        let responsible = lookup(pid)
+        return responsible > 0 ? responsible : nil
+    }
+
+    /// `responsibility_get_pid_responsible_for_pid` is exported by libSystem
+    /// but not declared in the SDK, so it is resolved once at runtime.
+    private static let responsibilityLookup: (@convention(c) (pid_t) -> pid_t)? = {
+        guard
+            let symbol = dlsym(
+                UnsafeMutableRawPointer(bitPattern: -2),
+                "responsibility_get_pid_responsible_for_pid")
+        else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (pid_t) -> pid_t).self)
+    }()
+
     /// File-descriptor count and type breakdown.
     public func fdBreakdown(_ pid: pid_t) -> FDBreakdown? {
         let bufferSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
