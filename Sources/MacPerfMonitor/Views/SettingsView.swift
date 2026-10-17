@@ -192,6 +192,14 @@ private struct MenuBarDockSettingsView: View {
             }
 
             Section {
+                Picker("Style", selection: $menuBar.design) {
+                    ForEach(MenuBarDesign.allCases) { design in
+                        Text(design.title).tag(design)
+                    }
+                }
+                .pickerStyle(.segmented)
+                caption(designCaption)
+
                 Picker("Presentation", selection: presentationBinding) {
                     ForEach(MenuBarPresentation.allCases) { presentation in
                         Text(presentation.title).tag(presentation)
@@ -234,6 +242,20 @@ private struct MenuBarDockSettingsView: View {
                                 Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
                     }
                 }
+                if menuBar.design == .compact {
+                    Picker("Text size", selection: $menuBar.textSize) {
+                        ForEach(CombinedMenuBarConfiguration.textSizes, id: \.self) { size in
+                            if size == CombinedMenuBarConfiguration.defaultTextSize {
+                                Text("\(size) pt (default)").tag(size)
+                            } else {
+                                Text("\(size) pt").tag(size)
+                            }
+                        }
+                    }
+                    caption(
+                        "The size of the figures and symbols in Compact read-outs. The default matches the menu bar's own text."
+                    )
+                }
                 Toggle("Show alarm marker", isOn: $menuBar.showsAlarmMarker)
                 caption(
                     "Put a red warning marker beside the read-outs while an alarm is active. Turning it off silences the marker only: the alarm still shows in the panel and still sends its notification."
@@ -271,6 +293,17 @@ private struct MenuBarDockSettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var designCaption: LocalizedStringKey {
+        switch menuBar.design {
+        case .compact:
+            return
+                "Each read-out is a symbol and its value on one line, in the menu bar's own font. Colour appears only while a reading needs attention."
+        case .classic:
+            return
+                "The read-out shapes from earlier versions. Choose a shape for each read-out below; your earlier choices are kept."
+        }
+    }
+
     private var presentationCaption: LocalizedStringKey {
         switch menuBar.presentation {
         case .focus:
@@ -285,10 +318,10 @@ private struct MenuBarDockSettingsView: View {
 
     /// One image per read-out, mirroring what `separate` mode puts on the bar.
     private var separatePreviewImages: [(metric: MenuBarMetric, image: NSImage)] {
-        let styles = menuBar.widgetStyles
+        let styles = menuBar.effectiveStyles
         return CombinedMenuBarReadouts.current(
             for: menuBar.selectedMetrics, styles: styles, model: model,
-            colors: menuBar.colorStates
+            colors: menuBar.effectiveColorStates, textSize: menuBar.textSize
         ).map { readout in
             (
                 metric: readout.metric,
@@ -352,14 +385,18 @@ private struct MenuBarDockSettingsView: View {
             // a read-out on changes what the row offers without changing where
             // anything in it sits.
             Group {
-                Picker("", selection: styleBinding(metric)) {
-                    ForEach(MenuBarWidgetStyle.supported(for: metric)) { style in
-                        Text(style.title).tag(style)
+                // Compact draws every read-out one way, so the shape is a
+                // Classic choice only.
+                if menuBar.design == .classic {
+                    Picker("", selection: styleBinding(metric)) {
+                        ForEach(MenuBarWidgetStyle.supported(for: metric)) { style in
+                            Text(style.title).tag(style)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 130)
+                    .accessibilityLabel(t("%@ widget style", metric.title))
                 }
-                .labelsHidden()
-                .frame(width: 130)
-                .accessibilityLabel(t("%@ widget style", metric.title))
 
                 Toggle(isOn: colorBinding(metric)) {
                     Image(systemName: "paintpalette")
@@ -405,9 +442,10 @@ private struct MenuBarDockSettingsView: View {
         let metrics =
             menuBar.presentation == .focus
             ? [menuBar.focusedMetric] : menuBar.selectedMetrics
-        let styles = menuBar.widgetStyles
+        let styles = menuBar.effectiveStyles
         let readouts = CombinedMenuBarReadouts.current(
-            for: metrics, styles: styles, model: model, colors: menuBar.colorStates)
+            for: metrics, styles: styles, model: model, colors: menuBar.effectiveColorStates,
+            textSize: menuBar.textSize)
         return CombinedMenuBarImage.image(
             readouts: readouts, styles: styles, presentation: menuBar.presentation,
             isDark: colorScheme == .dark)

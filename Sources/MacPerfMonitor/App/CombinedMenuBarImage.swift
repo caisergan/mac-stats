@@ -5,25 +5,28 @@ import MacPerfMonitorCore
 enum CombinedMenuBarReadouts {
     /// `colors` is the per-read-out colour switch; a metric with no entry is
     /// coloured. `isDark` is the menu bar's own appearance, which the read-out
-    /// needs for the colours it resolves for itself.
+    /// needs for the colours it resolves for itself. `textSize` is the compact
+    /// shape's figure size.
     static func current(
         for metrics: [MenuBarMetric], styles: [MenuBarMetric: MenuBarWidgetStyle],
-        model: SamplerModel, colors: [MenuBarMetric: Bool] = [:], isDark: Bool = true
+        model: SamplerModel, colors: [MenuBarMetric: Bool] = [:], isDark: Bool = true,
+        textSize: Int = CombinedMenuBarConfiguration.defaultTextSize
     ) -> [CombinedMenuBarReadout] {
         metrics.map { metric in
             buildReadout(
                 for: metric, style: styles[metric] ?? .default(for: metric), model: model,
-                isColored: colors[metric] ?? true, isDark: isDark)
+                isColored: colors[metric] ?? true, isDark: isDark, textSize: textSize)
         }
     }
 
     private static func buildReadout(
         for metric: MenuBarMetric, style: MenuBarWidgetStyle, model: SamplerModel,
-        isColored: Bool, isDark: Bool
+        isColored: Bool, isDark: Bool, textSize: Int
     ) -> CombinedMenuBarReadout {
         var readout = baseReadout(for: metric, model: model)
         readout.isColored = isColored
         readout.isDarkMenuBar = isDark
+        readout.compactTextSize = CGFloat(textSize)
         readout.valueTemplate = metric.menuBarValueTemplate
         enrich(&readout, style: style, model: model)
         return readout
@@ -142,6 +145,11 @@ enum CombinedMenuBarReadouts {
                 stackRows: rows)
             readout.stackTemplates =
                 chosen.isEmpty ? rows.map { [$0] } : chosen.map(\.menuBarTemplates)
+            readout.sensorCells = chosen.map { reading in
+                MenuBarSensorCell(
+                    kind: reading.kind, text: reading.menuBarValue,
+                    templates: reading.menuBarTemplates, value: reading.value)
+            }
             return readout
         }
     }
@@ -183,7 +191,7 @@ enum CombinedMenuBarReadouts {
         case .text:
             readout.textValue = readout.directionRows.map(\.text).joined(separator: " / ")
 
-        case .mini, .speed, .battery, .batteryDetails, .label:
+        case .compact, .mini, .speed, .battery, .batteryDetails, .label:
             break
         }
     }
@@ -325,14 +333,17 @@ enum CombinedMenuBarImage {
     private static let itemHeight: CGFloat = StatsMenuBarWidgets.Metrics.itemHeight
 
     /// One read-out on its own, for a `separate` mode status item (and for the
-    /// Settings preview of that mode).
+    /// Settings preview of that mode). `leading` and `trailing` are empty
+    /// room drawn into the image on either side, which is how a status item
+    /// sized exactly to its image gets padding on one side and not the other.
     static func image(
-        readout: CombinedMenuBarReadout, style: MenuBarWidgetStyle, isDark: Bool = true
+        readout: CombinedMenuBarReadout, style: MenuBarWidgetStyle, isDark: Bool = true,
+        leading: CGFloat = 0, trailing: CGFloat = 0
     ) -> NSImage {
         let cell = StatsMenuBarWidgets.cell(for: readout, style: style, isDark: isDark)
-        let image = MenuBarReadoutImage.render(width: max(cell.width, 1), height: itemHeight) {
-            _ in
-            cell.draw(0)
+        let width = max((leading + cell.width + trailing).rounded(.up), 1)
+        let image = MenuBarReadoutImage.render(width: width, height: itemHeight) { _ in
+            cell.draw(leading)
         }
         image.isTemplate = false
         return image

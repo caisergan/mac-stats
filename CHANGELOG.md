@@ -43,6 +43,30 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Changed
 
+- A new Compact menu bar design, now the default: every read-out is the
+  metric's symbol and its value on one line, in the menu bar's own font, so the
+  items sit beside the clock like system items. Settings > Menu Bar has a Style
+  switch between Compact and Classic. Classic is the design from before, with
+  every shape and colour choice made under it kept, so switching back restores
+  the bar exactly as it was.
+  - The bar stays in its own colour until a reading needs attention: orange
+    when elevated, red under strain. Memory follows pressure, not the share of
+    RAM in use. Compact keeps its own colour switches, so a Classic colour-off
+    does not hide these warnings.
+  - Network stacks upload over download behind arrows; only the arrows are
+    tinted (blue down, red up), and only while that direction is moving.
+  - The battery icon is coloured by charge (green above 40%, yellow from 20%
+    to 40%, red below 20%) and turns mint in Low Power Mode. Under the charge
+    it stacks the time to full while charging or the time left on battery; when
+    macOS has no estimate the charge stands alone instead of sitting over
+    "n/a".
+  - Sensors pair each figure with the symbol of its kind.
+  - Items are sized to their content, so read-outs sit 8 pt apart instead of
+    the roughly 20 pt macOS pads each item with.
+  - A Text size setting (10 to 15 pt, default 13) scales the figures, symbols
+    and battery together.
+- Menu bar read-outs no longer show a tooltip repeating their figures, in
+  either design. VoiceOver still reads the same summary.
 - Every chart in the menu bar panel answers the pointer too. Hover the
   processor, memory-pressure, GPU, charge, power, temperature, network or disk
   graph and a marker pins to the sample under the pointer, with a card giving

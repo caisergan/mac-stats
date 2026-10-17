@@ -40,6 +40,10 @@ struct CombinedMenuBarReadout {
     var stackRows: [String] = []
     /// What the text shape prints.
     var textValue: String = ""
+    /// The chosen sensors with their kinds, for the compact shape, which draws
+    /// each figure beside the symbol of what it measures. The stack shape
+    /// reads `stackRows` instead.
+    var sensorCells: [MenuBarSensorCell] = []
 
     /// The three-letter caption the mini, label and chart shapes draw.
     var captionText: String { customLabel ?? metric.shortTitle }
@@ -113,6 +117,57 @@ struct CombinedMenuBarReadout {
     /// The inbound direction's share of the combined throughput, 0...1.
     var inShare: Double = 0.5
 
+    /// How much attention this reading asks for, which is all the compact
+    /// shape colours: calm draws in the bar's own colour, elevated in orange,
+    /// strained in red.
+    ///
+    /// An active alarm is strained whatever the figure. Memory goes by the
+    /// pressure level, not the share of RAM in use: a healthy Mac can sit at
+    /// 80% used. The battery only counts on battery power, because a low
+    /// charge on a charger is already being fixed. Throughput and sensors
+    /// other than temperatures carry no verdict: traffic and watts are
+    /// information, not a problem.
+    var verdict: MenuBarVerdict {
+        if isAlarm { return .strained }
+        switch metric {
+        case .cpu, .gpu:
+            return MenuBarVerdict(fraction, elevated: 0.7, strained: 0.9)
+        case .ram, .pressure:
+            switch pressureLevel {
+            case .normal: return .calm
+            case .warning: return .elevated
+            case .critical: return .strained
+            }
+        case .temperature:
+            // `fraction` is the die temperature over 100 °C.
+            return MenuBarVerdict(fraction, elevated: 0.8, strained: 0.95)
+        case .energy:
+            guard isBatteryPresent, !isOnAC, let charge = batteryCharge else { return .calm }
+            return charge <= 0.1 ? .strained : charge <= 0.2 ? .elevated : .calm
+        case .network, .disk, .sensors:
+            return .calm
+        }
+    }
+
+    /// Whether a direction is moving enough to show a non-zero figure. The
+    /// compact shape tints its arrow only then, so an idle direction drops
+    /// back to the bar's own colour. 1000 bytes is where `formatSpeed` stops
+    /// printing "0 KB/s", so the tint and the figure always agree.
+    func isDirectionActive(input: Bool) -> Bool {
+        (input ? primaryBytesPerSec : secondaryBytesPerSec) >= 1000
+    }
+
+    /// What the compact shape draws that the figures alone do not capture:
+    /// the verdict colour, the arrow tints and each sensor's verdict. The
+    /// status item repaints when this changes, so a reading that crosses a
+    /// threshold without changing its rounded figure still changes colour.
+    var compactSignature: String {
+        let directions =
+            "\(isDirectionActive(input: true) ? 1 : 0)\(isDirectionActive(input: false) ? 1 : 0)"
+        let sensors = sensorCells.map { "\($0.verdict.rawValue)" }.joined()
+        return "\(verdict.rawValue)\(directions)\(sensors)"
+    }
+
     /// The state dot's colour: red on an active alarm, otherwise the metric's own
     /// scale, so the dot reads like a traffic light rather than a fixed colour.
     var stateColor: NSColor {
@@ -157,6 +212,8 @@ struct CombinedMenuBarReadout {
     /// The bar's appearance, needed by the colour helpers that have no `isDark`
     /// of their own to consult.
     var isDarkMenuBar: Bool = true
+    /// The compact shape's figure size, from the Text size setting.
+    var compactTextSize = CGFloat(CombinedMenuBarConfiguration.defaultTextSize)
 }
 
 extension MenuBarMetric {
@@ -180,6 +237,54 @@ extension MenuBarMetric {
         // app would be right to assert.
         case .ram, .energy, .network, .disk, .sensors:
             return false
+        }
+    }
+}
+
+/// How much attention a menu bar reading asks for. The compact shape's only
+/// use of colour.
+enum MenuBarVerdict: Int, Comparable {
+    case calm
+    case elevated
+    case strained
+
+    /// The verdict for a level against its two thresholds.
+    init(_ level: Double, elevated: Double, strained: Double) {
+        self = level >= strained ? .strained : level >= elevated ? .elevated : .calm
+    }
+
+    static func < (lhs: MenuBarVerdict, rhs: MenuBarVerdict) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+/// One chosen sensor as the compact shape draws it: the symbol for its kind,
+/// its figure, and the forms that figure can take, so the cell can reserve
+/// the widest of them.
+struct MenuBarSensorCell {
+    var kind: SensorKind
+    var text: String
+    var templates: [String]
+    var value: Double
+
+    /// Temperatures turn orange at 80 °C and red at 95 °C, the same as the
+    /// Temperature read-out. Every other kind is information only. Judged on
+    /// the rounded figure the cell prints, so the colour never disagrees with
+    /// the number beside it.
+    var verdict: MenuBarVerdict {
+        guard kind == .temperature else { return .calm }
+        return MenuBarVerdict(value.rounded(), elevated: 80, strained: 95)
+    }
+
+    /// The SF Symbol for the kind of reading.
+    var symbolName: String {
+        switch kind {
+        case .temperature: return "thermometer.medium"
+        case .power: return "bolt.fill"
+        case .voltage: return "v.circle"
+        case .current: return "a.circle"
+        case .energy: return "bolt.circle"
+        case .fan: return "fan"
         }
     }
 }

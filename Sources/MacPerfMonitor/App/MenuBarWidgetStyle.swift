@@ -12,7 +12,17 @@ import MacPerfMonitorCore
 /// drawing routine in `StatsMenuBarWidgets` instead of a view class.
 ///
 /// See `docs/menu-bar-widgets.md` for the shape-by-shape description.
+///
+/// `compact` is this app's own shape rather than a Stats port: an SF Symbol and
+/// the value on one line in the menu bar's own font, so the read-outs sit
+/// beside the clock and Wi-Fi like system items. It is not offered per
+/// read-out. The Compact menu bar design draws every read-out in it, and the
+/// Classic design draws each in the shape chosen from the others.
 enum MenuBarWidgetStyle: String, CaseIterable, Codable, Identifiable, Sendable {
+    /// The metric's symbol and its value on one line. Network and disk stack
+    /// their two directions behind arrows or letters; the battery adds its
+    /// time estimate; sensors pair each figure with the symbol of its kind.
+    case compact
     /// A three-letter caption above the value. Stats' default for most modules.
     case mini
     /// A filled sparkline of recent history, optionally boxed.
@@ -47,6 +57,7 @@ enum MenuBarWidgetStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     /// The name shown in the Settings picker.
     var title: String {
         switch self {
+        case .compact: return t("Compact")
         case .mini: return t("Mini")
         case .lineChart: return t("Line chart")
         case .barChart: return t("Bar chart")
@@ -73,6 +84,9 @@ enum MenuBarWidgetStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     /// shapes need a battery, and Memory needs a free/used split.
     func supports(_ metric: MenuBarMetric) -> Bool {
         switch self {
+        case .compact:
+            // Every read-out has a compact form, which the Compact design uses.
+            return true
         case .networkChart, .speed:
             return metric.hasSecondaryValue
         case .battery, .batteryDetails:
@@ -90,14 +104,16 @@ enum MenuBarWidgetStyle: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    /// The shapes offered for `metric`, in Stats' menu order.
+    /// The shapes the Classic design offers for `metric`, in Stats' menu
+    /// order. Compact is a design of its own rather than one of these.
     static func supported(for metric: MenuBarMetric) -> [MenuBarWidgetStyle] {
-        allCases.filter { $0.supports(metric) }
+        allCases.filter { $0 != .compact && $0.supports(metric) }
     }
 
-    /// The shape a metric starts on, matching the `Default: true` widget in the
-    /// matching Stats module config: mini for the percentage readouts, speed for
-    /// the throughput ones, battery for the battery.
+    /// The shape a metric starts on in the Classic design, matching the
+    /// `Default: true` widget in the matching Stats module config: mini for the
+    /// percentage readouts, speed for the throughput ones, battery for the
+    /// battery.
     static func `default`(for metric: MenuBarMetric) -> MenuBarWidgetStyle {
         switch metric {
         case .pressure, .ram, .cpu, .gpu, .temperature: return .mini

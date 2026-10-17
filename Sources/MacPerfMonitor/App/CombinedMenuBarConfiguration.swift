@@ -103,6 +103,27 @@ enum MenuBarPresentation: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the menu bar read-outs are drawn as a whole.
+enum MenuBarDesign: String, CaseIterable, Identifiable {
+    /// Every read-out as a symbol and its value on one line, in the menu
+    /// bar's own font, coloured only while a reading is under strain, with
+    /// the items sized to their content.
+    case compact
+    /// The design from before Compact: each read-out in the shape chosen for
+    /// it (the Stats ports), with its own colour switch, in status items
+    /// padded the way macOS pads them.
+    case classic
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .compact: return t("Compact")
+        case .classic: return t("Classic")
+        }
+    }
+}
+
 final class CombinedMenuBarConfiguration: ObservableObject {
     static let selectionDefaultsKey = "combinedMenuBarMetrics"
     static let presentationDefaultsKey = "combinedMenuBarPresentation"
@@ -111,6 +132,15 @@ final class CombinedMenuBarConfiguration: ObservableObject {
     static let alarmMarkerDefaultsKey = "combinedMenuBarAlarmMarker"
     static let colorDefaultsKey = "combinedMenuBarLevelColors"
     static let orderDefaultsKey = "combinedMenuBarOrder"
+    static let designDefaultsKey = "combinedMenuBarDesign"
+    static let compactColorDefaultsKey = "combinedMenuBarCompactColors"
+    static let textSizeDefaultsKey = "combinedMenuBarTextSize"
+    /// The menu bar's own text size, which compact read-outs use unless the
+    /// user picks another.
+    static let defaultTextSize = 13
+    /// The sizes Settings offers. Below 10 the figures stop being readable at
+    /// a glance; above 15 the two stacked network rows no longer fit the bar.
+    static let textSizes = Array(10...15)
     private static let ramMigrationDefaultsKey = "combinedMenuBarRAMMetricAdded"
     private static let legacyCPUKey = "showCPUMenuBar"
     private static let legacyGPUKey = "showGPUMenuBar"
@@ -118,6 +148,12 @@ final class CombinedMenuBarConfiguration: ObservableObject {
     private static let legacyNetworkKey = "showNetworkMenuBar"
 
     @Published private(set) var selectedMetrics: [MenuBarMetric]
+    /// Compact or Classic. Compact is the default, for existing installs too;
+    /// Classic keeps every shape and colour choice made before, so switching
+    /// back restores the bar exactly as it was.
+    @Published var design: MenuBarDesign {
+        didSet { defaults.set(design.rawValue, forKey: Self.designDefaultsKey) }
+    }
     @Published var presentation: MenuBarPresentation {
         didSet { defaults.set(presentation.rawValue, forKey: Self.presentationDefaultsKey) }
     }
@@ -131,14 +167,42 @@ final class CombinedMenuBarConfiguration: ObservableObject {
     @Published var showsAlarmMarker: Bool {
         didSet { defaults.set(showsAlarmMarker, forKey: Self.alarmMarkerDefaultsKey) }
     }
-    /// The widget shape each metric draws itself in. A metric with no entry uses
-    /// `MenuBarWidgetStyle.default(for:)`, so an existing install keeps the look
-    /// it had before the shapes were selectable.
+    /// The point size of the figures in compact read-outs. Their symbols,
+    /// gaps and battery outline scale with it, so a larger setting reads as
+    /// the same design, bigger. The other shapes keep the sizes Stats gave
+    /// them.
+    @Published var textSize: Int {
+        didSet { defaults.set(textSize, forKey: Self.textSizeDefaultsKey) }
+    }
+    /// The widget shape each metric draws itself in under the Classic design.
+    /// A metric with no entry uses `MenuBarWidgetStyle.default(for:)`, so an
+    /// existing install keeps the look it had before the shapes were
+    /// selectable.
     @Published private(set) var widgetStyles: [MenuBarMetric: MenuBarWidgetStyle]
-    /// Whether each read-out draws in colour. A metric with no entry is
-    /// coloured, so an existing install keeps the look it had before the switch
-    /// existed.
+    /// Whether each read-out draws in colour under the Classic design. A
+    /// metric with no entry is coloured, so an existing install keeps the look
+    /// it had before the switch existed.
     @Published private(set) var colorStates: [MenuBarMetric: Bool]
+    /// The same switch for the Compact design, kept apart because it means
+    /// something else there: Classic colours a usage scale all the time, which
+    /// is what people turned off; Compact colours only a reading under strain.
+    /// A Classic colour-off carrying over would hide exactly the warning the
+    /// Compact colours exist for.
+    @Published private(set) var compactColorStates: [MenuBarMetric: Bool]
+
+    /// The shape each metric is drawn in under the current design: compact for
+    /// every metric, or the Classic choices.
+    var effectiveStyles: [MenuBarMetric: MenuBarWidgetStyle] {
+        guard design == .classic else {
+            return Dictionary(uniqueKeysWithValues: MenuBarMetric.allCases.map { ($0, .compact) })
+        }
+        return widgetStyles
+    }
+
+    /// The colour switches of the current design.
+    var effectiveColorStates: [MenuBarMetric: Bool] {
+        design == .classic ? colorStates : compactColorStates
+    }
 
     /// Every read-out in the user's order, selected or not.
     ///
@@ -167,12 +231,20 @@ final class CombinedMenuBarConfiguration: ObservableObject {
         selectedMetrics = loadedMetrics
         metricOrder = Self.loadOrder(from: defaults, selection: loadedMetrics)
         widgetStyles = Self.loadStyles(from: defaults)
-        colorStates = Self.loadColorStates(from: defaults)
+        colorStates = Self.loadColorStates(from: defaults, key: Self.colorDefaultsKey)
+        compactColorStates = Self.loadColorStates(
+            from: defaults, key: Self.compactColorDefaultsKey)
+        design =
+            defaults.string(forKey: Self.designDefaultsKey)
+            .flatMap(MenuBarDesign.init(rawValue:)) ?? .compact
         presentation =
             defaults.string(forKey: Self.presentationDefaultsKey)
             .flatMap(MenuBarPresentation.init(rawValue:)) ?? .strip
         showsAlarmMarker =
             defaults.object(forKey: Self.alarmMarkerDefaultsKey) as? Bool ?? true
+        let storedTextSize = defaults.integer(forKey: Self.textSizeDefaultsKey)
+        textSize =
+            Self.textSizes.contains(storedTextSize) ? storedTextSize : Self.defaultTextSize
         focusedMetric =
             savedFocus.flatMap { loadedMetrics.contains($0) ? $0 : nil }
             ?? loadedMetrics.first ?? .pressure
@@ -201,34 +273,44 @@ final class CombinedMenuBarConfiguration: ObservableObject {
         selectedMetrics.contains(metric)
     }
 
-    /// The shape `metric` draws itself in, falling back to its default and
-    /// ignoring a stored shape the metric cannot draw.
+    /// The Classic shape `metric` draws itself in, falling back to its default
+    /// and ignoring a stored shape the metric cannot draw.
     func style(for metric: MenuBarMetric) -> MenuBarWidgetStyle {
-        guard let style = widgetStyles[metric], style.supports(metric) else {
+        guard let style = widgetStyles[metric], style.supports(metric), style != .compact else {
             return .default(for: metric)
         }
         return style
     }
 
     func setStyle(_ style: MenuBarWidgetStyle, for metric: MenuBarMetric) {
-        guard style.supports(metric) else { return }
+        // Compact is the design, not one of the Classic shapes.
+        guard style.supports(metric), style != .compact else { return }
         guard widgetStyles[metric] != style else { return }
         widgetStyles[metric] = style
         persistStyles()
     }
 
-    /// Whether `metric` draws in colour. Read-outs are coloured unless the
-    /// user turned it off.
+    /// Whether `metric` draws in colour under the current design. Read-outs
+    /// are coloured unless the user turned it off.
     func isColored(_ metric: MenuBarMetric) -> Bool {
-        colorStates[metric] ?? true
+        effectiveColorStates[metric] ?? true
     }
 
+    /// Set the colour switch of the current design only.
     func setColored(_ colored: Bool, for metric: MenuBarMetric) {
-        guard colorStates[metric] != colored else { return }
-        colorStates[metric] = colored
+        guard effectiveColorStates[metric] != colored else { return }
+        let key: String
+        let states: [MenuBarMetric: Bool]
+        if design == .classic {
+            colorStates[metric] = colored
+            (key, states) = (Self.colorDefaultsKey, colorStates)
+        } else {
+            compactColorStates[metric] = colored
+            (key, states) = (Self.compactColorDefaultsKey, compactColorStates)
+        }
         defaults.set(
-            colorStates.reduce(into: [String: Bool]()) { $0[$1.key.rawValue] = $1.value },
-            forKey: Self.colorDefaultsKey)
+            states.reduce(into: [String: Bool]()) { $0[$1.key.rawValue] = $1.value },
+            forKey: key)
     }
 
     /// Move a read-out one place in the list, past whatever is next to it,
@@ -270,14 +352,17 @@ final class CombinedMenuBarConfiguration: ObservableObject {
         }
         return raw.reduce(into: [MenuBarMetric: MenuBarWidgetStyle]()) { result, entry in
             guard let metric = MenuBarMetric(rawValue: entry.key),
-                let style = MenuBarWidgetStyle(rawValue: entry.value), style.supports(metric)
+                let style = MenuBarWidgetStyle(rawValue: entry.value), style.supports(metric),
+                style != .compact
             else { return }
             result[metric] = style
         }
     }
 
-    private static func loadColorStates(from defaults: UserDefaults) -> [MenuBarMetric: Bool] {
-        guard let raw = defaults.dictionary(forKey: colorDefaultsKey) as? [String: Bool] else {
+    private static func loadColorStates(
+        from defaults: UserDefaults, key: String
+    ) -> [MenuBarMetric: Bool] {
+        guard let raw = defaults.dictionary(forKey: key) as? [String: Bool] else {
             return [:]
         }
         return raw.reduce(into: [MenuBarMetric: Bool]()) { result, entry in
