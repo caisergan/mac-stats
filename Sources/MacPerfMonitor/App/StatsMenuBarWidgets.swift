@@ -296,10 +296,13 @@ enum StatsMenuBarWidgets {
         var percent = readout.value
         let textWidth: CGFloat
         if let time {
-            // Reserved for "100%" and a two-digit hour, so the column holds
-            // still as the charge and the estimate move.
+            // Reserved for a two-digit charge over a one-digit hour, which is
+            // what the column shows nearly all the time, so it holds still as
+            // the figures move. 100% or an estimate of ten hours or more is
+            // rare enough to widen it while it lasts: reserving for them left
+            // empty room at the end of the row the rest of the time.
             textWidth =
-                ([percent, time, "100%", "00:00"].map { widthOfString($0, font: font) }
+                ([percent, time, "00%", "0:00"].map { widthOfString($0, font: font) }
                 .max() ?? 0).rounded(.up)
         } else {
             let reserved = readout.valueTemplate.map { widthOfString($0, font: font) } ?? 0

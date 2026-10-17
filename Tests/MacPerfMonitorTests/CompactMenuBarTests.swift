@@ -137,7 +137,7 @@ final class CompactMenuBarTests: XCTestCase {
         XCTAssertEqual(width("26%"), width("100%"))
     }
 
-    func testBatteryStacksItsTimeUnderTheChargeAndHoldsItsWidth() throws {
+    func testBatteryStacksItsTimeUnderTheCharge() throws {
         func readout(time: String?, charging: Bool) -> CombinedMenuBarReadout {
             var readout = CombinedMenuBarReadout(
                 metric: .energy, value: "80%", isAlarm: false, batteryCharge: 0.8,
@@ -173,9 +173,11 @@ final class CompactMenuBarTests: XCTestCase {
         XCTAssertGreaterThan(try lowerRowInk(discharging), 0)
         // No "n/a" placeholder: without an estimate nothing sits in the lower row.
         XCTAssertEqual(try lowerRowInk(noEstimate), 0)
-        // The item keeps one width whether or not there is an estimate.
+        // While an estimate moves, the stacked column holds one width. It is
+        // sized to the figures rather than to "100%" over "10:00", so it may
+        // differ from the one-line charge: that only happens when the power
+        // source changes.
         XCTAssertEqual(width(charging), width(discharging))
-        XCTAssertEqual(width(charging), width(noEstimate))
     }
 
     func testTextSizePersistsAndFallsBackToTheMenuBarSize() throws {
