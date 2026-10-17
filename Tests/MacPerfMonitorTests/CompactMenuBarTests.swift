@@ -184,4 +184,15 @@ final class CompactMenuBarTests: XCTestCase {
             XCTAssertLessThan(width(metric, size: 13), width(metric, size: 15), "\(metric)")
         }
     }
+
+    func testLowPowerModeLeadsTheBatteryWithALeaf() {
+        func width(lowPower: Bool) -> CGFloat {
+            var readout = CombinedMenuBarReadout(
+                metric: .energy, value: "80%", isAlarm: false, batteryCharge: 0.8,
+                isBatteryPresent: true, isLowPowerMode: lowPower)
+            readout.valueTemplate = MenuBarMetric.energy.menuBarValueTemplate
+            return StatsMenuBarWidgets.cell(for: readout, style: .compact, isDark: true).width
+        }
+        XCTAssertGreaterThan(width(lowPower: true), width(lowPower: false))
+    }
 }
