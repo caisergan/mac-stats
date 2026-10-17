@@ -10885,6 +10885,35 @@
         }
       }
     },
+    "Style" : {
+      "comment" : "Settings, menu bar: choosing between the Compact and Classic menu bar designs.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stil"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Style"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Style"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "样式"
+          }
+        }
+      }
+    },
     "Summary" : {
       "comment" : "Preview copy. AI-generated translations; native-speaker review pending.",
       "extractionState" : "manual",
@@ -23045,6 +23074,64 @@
         }
       }
     },
+    "%lld pt" : {
+      "comment" : "Settings, menu bar: the Compact read-outs' text size.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt"
+          }
+        }
+      }
+    },
+    "%lld pt (default)" : {
+      "comment" : "Settings, menu bar: the Compact read-outs' text size.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt (Standard)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt (default)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt (par défaut)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt（默认）"
+          }
+        }
+      }
+    },
     "%lld protected by macOS" : {
       "comment" : "Disk Map (1.6.0)",
       "extractionState" : "manual",
@@ -31948,6 +32035,35 @@
         }
       }
     },
+    "Classic" : {
+      "comment" : "Settings, menu bar: choosing between the Compact and Classic menu bar designs.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Klassisch"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Classic"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Classique"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经典"
+          }
+        }
+      }
+    },
     "Classes that gained instances — ranked leak suspects, fastest-growing first." : {
       "comment" : "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState" : "manual",
@@ -33014,6 +33130,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "备注"
+          }
+        }
+      }
+    },
+    "Compact" : {
+      "comment" : "Menu bar widget shape: the metric's symbol and its value on one line.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kompakt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compact"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compact"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紧凑"
           }
         }
       }
@@ -40320,6 +40466,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每个百分比根据两次采样之间该核心的内核时间计数器变化计算。用户时间包括 nice 优先级任务。空闲时间是剩余部分。放大的核心图和表格使用单次捕获样本，而非所选历史时间范围的平均值。"
+          }
+        }
+      }
+    },
+    "Each read-out is a symbol and its value on one line, in the menu bar's own font. Colour appears only while a reading needs attention." : {
+      "comment" : "Settings, menu bar: choosing between the Compact and Classic menu bar designs.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede Anzeige ist ein Symbol mit ihrem Wert in einer Zeile, in der Schrift der Menüleiste. Farbe erscheint nur, wenn ein Wert Aufmerksamkeit braucht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each read-out is a symbol and its value on one line, in the menu bar's own font. Colour appears only while a reading needs attention."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque indicateur est un symbole et sa valeur sur une ligne, dans la police de la barre des menus. La couleur n'apparaît que lorsqu'une valeur demande votre attention."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个读数都是一个符号加上它的数值，排成一行，使用菜单栏自身的字体。只有当读数需要注意时才会显示颜色。"
           }
         }
       }
@@ -76605,6 +76780,35 @@
         }
       }
     },
+    "Text size" : {
+      "comment" : "Settings, menu bar: the Compact read-outs' text size.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textgröße"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Text size"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taille du texte"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字大小"
+          }
+        }
+      }
+    },
     "The Disk Map scans your disk to show what is using space. With Full Disk Access it can see Mail, Messages, Safari, Time Machine and other apps' data; without it those stay hidden and macOS asks about Desktop, Documents and Downloads separately. The grant takes effect after %@ relaunches." : {
       "comment" : "Disk Map (1.6.0)",
       "extractionState" : "manual",
@@ -77352,6 +77556,35 @@
         }
       }
     },
+    "The read-out shapes from earlier versions. Choose a shape for each read-out below; your earlier choices are kept." : {
+      "comment" : "Settings, menu bar: choosing between the Compact and Classic menu bar designs.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Anzeigeformen früherer Versionen. Wähle unten für jede Anzeige eine Form; deine bisherigen Einstellungen bleiben erhalten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The read-out shapes from earlier versions. Choose a shape for each read-out below; your earlier choices are kept."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les formes d'indicateurs des versions précédentes. Choisissez une forme pour chaque indicateur ci-dessous ; vos choix précédents sont conservés."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早期版本的读数样式。请在下方为每个读数选择样式；你之前的选择会被保留。"
+          }
+        }
+      }
+    },
     "The run-queue length (roughly how many processes are competing to run) averaged over the last minute, with the 5 and 15-minute figures beside it. A load near your core count (%@) means the CPU is fully subscribed; well above it means work is queuing." : {
       "comment" : "Metric Cards & Explanations",
       "extractionState" : "manual",
@@ -77556,6 +77789,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "扫描未发现此类型的内容。"
+          }
+        }
+      }
+    },
+    "The size of the figures and symbols in Compact read-outs. The default matches the menu bar's own text." : {
+      "comment" : "Settings, menu bar: the Compact read-outs' text size.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Größe der Zahlen und Symbole in kompakten Anzeigen. Der Standard entspricht dem Text der Menüleiste."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The size of the figures and symbols in Compact read-outs. The default matches the menu bar's own text."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La taille des chiffres et des symboles dans les indicateurs compacts. La valeur par défaut correspond au texte de la barre des menus."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紧凑读数中数字和符号的大小。默认值与菜单栏自身的文字一致。"
           }
         }
       }

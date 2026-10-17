@@ -13,6 +13,9 @@ import MacPerfMonitorCore
 // what is dropped is the per-widget settings UI, so each shape uses the option
 // values that the matching Stats module config ships as its default. Deviations
 // are marked `// DEVIATION:` where they exist.
+//
+// The compact shape is the exception: it is this app's own, not a Stats port,
+// and has its own section below.
 
 /// One slice of a composite gauge: how much of the whole it covers (0...1) and
 /// the colour to paint it. Stats' `ColorValue`.
@@ -78,6 +81,7 @@ enum StatsMenuBarWidgets {
         for readout: CombinedMenuBarReadout, style: MenuBarWidgetStyle, isDark: Bool
     ) -> Cell {
         switch style {
+        case .compact: return compact(readout, isDark)
         case .mini: return mini(readout, isDark)
         case .lineChart: return lineChart(readout, isDark)
         case .barChart: return barChart(readout, isDark)
@@ -93,6 +97,365 @@ enum StatsMenuBarWidgets {
         case .text: return text(readout, isDark)
         case .label: return label(readout, isDark)
         }
+    }
+
+    // MARK: - Compact (this app's own shape, not a Stats port)
+
+    /// The compact shape's type and spacing at one text size.
+    ///
+    /// Everything is derived from the figure size the user picked (13pt by
+    /// default, the menu bar's own text size), so the symbols, gaps and battery
+    /// outline scale with it and a larger setting reads as the same design,
+    /// bigger. Monospaced digits keep a cell's width still as figures change.
+    private struct CompactMetrics {
+        /// The size against which every other measure here was tuned.
+        static let referenceSize: CGFloat = 13
+
+        let scale: CGFloat
+        let valueFont: NSFont
+        /// The two stacked rows of network and disk, kept as large as two
+        /// rows can be and still fit the bar's height.
+        let rowFont: NSFont
+        let markerFont: NSFont
+        /// A little under the text size: a symbol at the full size reads
+        /// heavier than the figure it introduces.
+        let symbolPointSize: CGFloat
+        /// Between a symbol and its figure.
+        let glyphGap: CGFloat
+        /// Between two symbol-and-figure pairs in one cell (the sensors).
+        let pairGap: CGFloat
+        /// Between the battery's charge and its time estimate.
+        let timeGap: CGFloat
+
+        init(textSize: CGFloat) {
+            scale = textSize / Self.referenceSize
+            valueFont = .monospacedDigitSystemFont(ofSize: textSize, weight: .regular)
+            let rowSize = min(max(9.5 * scale, 8), 10.5)
+            rowFont = .monospacedDigitSystemFont(ofSize: rowSize, weight: .semibold)
+            markerFont = .systemFont(ofSize: rowSize, weight: .bold)
+            symbolPointSize = 11.5 * scale
+            glyphGap = 3 * scale
+            pairGap = 6 * scale
+            timeGap = 4 * scale
+        }
+    }
+
+    /// Tinted symbols by name, size and colour: a cell is repainted every time
+    /// a figure moves, and the symbols themselves rarely change.
+    private static var compactSymbolCache: [String: NSImage] = [:]
+
+    /// The bar's vertical centre line in a cell's own coordinates, which
+    /// `translated` has already lifted by the vertical margin.
+    private static var compactMidY: CGFloat { Metrics.itemHeight / 2 - Metrics.marginY }
+
+    private static func compact(_ readout: CombinedMenuBarReadout, _ isDark: Bool) -> Cell {
+        let metrics = CompactMetrics(textSize: readout.compactTextSize)
+        switch readout.metric {
+        case .network, .disk:
+            return compactDirections(readout, isDark, metrics)
+        case .energy where readout.isBatteryPresent:
+            return compactBattery(readout, isDark, metrics)
+        case .energy:
+            // A Mac with no battery reports its power draw here instead.
+            return compactGlyphValue(
+                symbolName: "bolt.fill", value: readout.value, templates: ["00W"],
+                color: compactColor(readout.verdict, readout, isDark), metrics: metrics)
+        case .sensors:
+            return compactSensors(readout, isDark, metrics)
+        case .pressure, .ram, .cpu, .gpu, .temperature:
+            return compactGlyphValue(
+                symbolName: readout.metric.symbolName, value: readout.value,
+                templates: readout.valueTemplate.map { [$0] } ?? [],
+                color: compactColor(readout.verdict, readout, isDark), metrics: metrics)
+        }
+    }
+
+    /// A verdict as a colour: the bar's own colour while calm, orange when
+    /// elevated, red under strain. With the read-out's colour switch off it
+    /// stays the bar's own colour, except that an active alarm still shows
+    /// red: that is the alarm speaking, and it has its own switch.
+    private static func compactColor(
+        _ verdict: MenuBarVerdict, _ readout: CombinedMenuBarReadout, _ isDark: Bool
+    ) -> NSColor {
+        if readout.isAlarm { return .systemRed }
+        guard readout.isColored else { return textColor(isDark) }
+        switch verdict {
+        case .calm: return textColor(isDark)
+        case .elevated: return .systemOrange
+        case .strained: return .systemRed
+        }
+    }
+
+    /// A symbol and a figure on one line, both centred on the bar. The figure
+    /// reserves the widest of `templates`, so the cell holds still while the
+    /// number moves, and drops its unit rather than widen the cell when it
+    /// outgrows them: 100% prints as 100 beside a symbol that already names it.
+    private static func compactGlyphValue(
+        symbolName: String, value: String, templates: [String], color: NSColor,
+        metrics: CompactMetrics
+    ) -> Cell {
+        let font = metrics.valueFont
+        let glyph = compactSymbol(symbolName, color: color, pointSize: metrics.symbolPointSize)
+        let reserved = templates.map { widthOfString($0, font: font) }.max() ?? 0
+        var text = value
+        if reserved > 0, widthOfString(text, font: font) > reserved.rounded(.up) {
+            text = trimUnit(text)
+        }
+        let textWidth = max(reserved, widthOfString(text, font: font)).rounded(.up)
+        let glyphWidth =
+            glyph.map { $0.size.width + (textWidth > 0 ? metrics.glyphGap : 0) } ?? 0
+        let width = (glyphWidth + textWidth).rounded(.up)
+
+        return Cell(width: width) { originX in
+            translated(originX) {
+                if let glyph { drawCompactSymbol(glyph, x: 0) }
+                drawCompactText(text, font: font, color: color, x: glyphWidth, width: textWidth)
+            }
+        }
+    }
+
+    /// Network and disk: both directions in two short rows, each behind its
+    /// marker, ↑ over ↓ for the network (upload on top, as `directionRows`
+    /// has always ordered it) and R over W for the disk. Only the marker
+    /// carries colour, blue in and red out, and only while that direction is
+    /// moving; the figures stay in the bar's own colour so they read easily.
+    ///
+    /// The markers sit at the cell's leading edge, so the read-out starts
+    /// where its neighbour's gap ends, and the figures are right aligned just
+    /// after them so their units line up. The width reserved for a busier
+    /// rate is left as empty space after the figures, where it reads as a
+    /// little extra room before the next item rather than a hole between the
+    /// previous item and the arrows.
+    private static func compactDirections(
+        _ readout: CombinedMenuBarReadout, _ isDark: Bool, _ metrics: CompactMetrics
+    ) -> Cell {
+        let rows = readout.directionRows
+        let font = metrics.rowFont
+        let markerFont = metrics.markerFont
+        let symbols = readout.speedSymbols
+        let markers = rows.map { row in
+            readout.metric == .disk
+                ? (row.isInbound ? symbols.input : symbols.output)
+                : (row.isInbound ? "\u{2193}" : "\u{2191}")
+        }
+        let markerWidth =
+            (markers.map { widthOfString($0, font: markerFont) }.max() ?? 0).rounded(.up)
+        // Reserved for the widest common figure, so the cell does not twitch
+        // as a rate moves between KB/s and MB/s. Ten MB/s and over is rare
+        // enough to widen the cell while it lasts rather than reserve for it.
+        let figureWidth =
+            (["000 KB/s", "0.0 MB/s"] + rows.map(\.text))
+            .map { widthOfString($0, font: font) }.max()?.rounded(.up) ?? 0
+        let gap = 2 * metrics.scale
+        let width = (markerWidth + gap + figureWidth).rounded(.up)
+        let figureColor = textColor(isDark)
+        let markerColors = rows.map { row -> NSColor in
+            guard readout.isColored, readout.isDirectionActive(input: row.isInbound) else {
+                return figureColor
+            }
+            return row.isInbound ? .systemBlue : .systemRed
+        }
+
+        return Cell(width: width) { originX in
+            translated(originX) {
+                let lineGap: CGFloat = 2.5
+                let top = pixelAligned(compactMidY + lineGap / 2)
+                let bottom = pixelAligned(compactMidY - lineGap / 2 - font.capHeight)
+                let shownWidth =
+                    (rows.map { widthOfString($0.text, font: font) }.max() ?? 0).rounded(.up)
+                for (index, baseline) in zip(rows.indices, [top, bottom]) {
+                    drawCompactText(
+                        markers[index], font: markerFont, color: markerColors[index], x: 0,
+                        width: markerWidth, baseline: baseline)
+                    drawCompactText(
+                        rows[index].text, font: font, color: figureColor, x: markerWidth + gap,
+                        width: shownWidth, baseline: baseline, alignment: .right)
+                }
+            }
+        }
+    }
+
+    /// The battery: its outline, the charge, and the time estimate. The time
+    /// is time to full while charging (the bolt in the outline says which)
+    /// and time left on battery. macOS gives no estimate while the charge is
+    /// held at a limit, or for a while after the power source changes, and
+    /// then the time is simply left out instead of printing "n/a".
+    ///
+    /// The outline's fill is coloured by charge (see `compactBatteryFill`),
+    /// and in Low Power Mode it carries a leaf, unless a charger is attached:
+    /// then the bolt or plug takes the middle, as it does in macOS.
+    private static func compactBattery(
+        _ readout: CombinedMenuBarReadout, _ isDark: Bool, _ metrics: CompactMetrics
+    ) -> Cell {
+        let font = metrics.valueFont
+        let color = compactColor(readout.verdict, readout, isDark)
+        let fill = compactBatteryFill(
+            charge: readout.batteryCharge ?? 1, isLowPowerMode: readout.isLowPowerMode,
+            isColored: readout.isColored, isDark: isDark)
+        let showsLeaf = readout.isLowPowerMode && !readout.isOnAC
+        let reserved = readout.valueTemplate.map { widthOfString($0, font: font) } ?? 0
+        var percent = readout.value
+        if reserved > 0, widthOfString(percent, font: font) > reserved.rounded(.up) {
+            percent = trimUnit(percent)
+        }
+        let percentWidth = max(reserved, widthOfString(percent, font: font)).rounded(.up)
+        let time = readout.batteryTimeText
+        let timeWidth = time.map {
+            max(widthOfString("0:00", font: font), widthOfString($0, font: font)).rounded(.up)
+        }
+        let percentX = (batteryOutlineWidth * metrics.scale + metrics.glyphGap).rounded(.up)
+        let width = percentX + percentWidth + (timeWidth.map { metrics.timeGap + $0 } ?? 0)
+        let timeColor = textColor(isDark).withAlphaComponent(0.55)
+
+        return Cell(width: width.rounded(.up)) { originX in
+            translated(originX) {
+                // The outline is drawn at Stats' fixed size, so it is scaled
+                // about the bar's centre line to keep pace with the text.
+                if let context = NSGraphicsContext.current?.cgContext {
+                    context.saveGState()
+                    context.translateBy(x: 0, y: compactMidY)
+                    context.scaleBy(x: metrics.scale, y: metrics.scale)
+                    context.translateBy(x: 0, y: -compactMidY)
+                    drawBatteryOutline(readout, isDark, x: 0, fill: fill)
+                    if showsLeaf { drawLowPowerLeaf(isDark) }
+                    context.restoreGState()
+                }
+                drawCompactText(percent, font: font, color: color, x: percentX, width: percentWidth)
+                if let time, let timeWidth {
+                    drawCompactText(
+                        time, font: font, color: timeColor,
+                        x: percentX + percentWidth + metrics.timeGap, width: timeWidth)
+                }
+            }
+        }
+    }
+
+    /// The Compact battery's fill: green above 40%, yellow from 20% to 40%,
+    /// red below 20%, and a mint green in Low Power Mode, which the leaf
+    /// drawn over it names. With the colour switch off the fill is the bar's
+    /// own colour, except that below 20% stays red: a flat battery is a
+    /// warning, not decoration, as in the Classic battery shapes.
+    nonisolated static func compactBatteryFill(
+        charge: Double, isLowPowerMode: Bool, isColored: Bool, isDark: Bool
+    ) -> NSColor {
+        guard isColored else {
+            return batteryColor(charge, isDark: isDark, isLowPowerMode: false, colored: false)
+        }
+        if isLowPowerMode { return .systemMint }
+        if charge > 0.4 { return .systemGreen }
+        if charge >= 0.2 { return .systemYellow }
+        return .systemRed
+    }
+
+    /// The Low Power Mode leaf, in the middle of the battery outline at Stats'
+    /// coordinates (the caller scales it with the outline). Like the charging
+    /// bolt, a ring around it is punched through the fill so it stays legible
+    /// on any charge colour.
+    private static func drawLowPowerLeaf(_ isDark: Bool) {
+        let center = CGPoint(x: batteryBorderWidth + 0.5 + (batterySize.width - 1) / 2, y: 9)
+        guard
+            let cut = compactSymbol("leaf.fill", color: .black, pointSize: 9.5),
+            let leaf = compactSymbol("leaf.fill", color: textColor(isDark), pointSize: 8)
+        else { return }
+        func rect(_ image: NSImage) -> NSRect {
+            NSRect(
+                x: center.x - image.size.width / 2, y: center.y - image.size.height / 2,
+                width: image.size.width, height: image.size.height)
+        }
+        cut.draw(in: rect(cut), from: .zero, operation: .destinationOut, fraction: 1)
+        leaf.draw(in: rect(leaf))
+    }
+
+    /// The chosen sensors side by side, each figure behind the symbol of its
+    /// kind, so "21W" sits beside a bolt and "68°" beside a thermometer and
+    /// neither has to be remembered. Temperatures take the verdict colours.
+    private static func compactSensors(
+        _ readout: CombinedMenuBarReadout, _ isDark: Bool, _ metrics: CompactMetrics
+    ) -> Cell {
+        let cells = readout.sensorCells
+        guard !cells.isEmpty else {
+            // Nothing chosen: the symbol alone keeps the item visible and
+            // clickable, which is the way back to the panel that chooses.
+            return compactGlyphValue(
+                symbolName: readout.metric.symbolName, value: "", templates: [],
+                color: textColor(isDark), metrics: metrics)
+        }
+        let parts = cells.map { cell in
+            compactGlyphValue(
+                symbolName: cell.symbolName, value: cell.text, templates: cell.templates,
+                color: compactColor(cell.verdict, readout, isDark), metrics: metrics)
+        }
+        let pairGap = metrics.pairGap.rounded()
+        let width = parts.reduce(0) { $0 + $1.width } + pairGap * CGFloat(parts.count - 1)
+
+        // Each part translates to its own origin, so this cell does not.
+        return Cell(width: width) { originX in
+            var x = originX
+            for part in parts {
+                part.draw(x)
+                x += part.width + pairGap
+            }
+        }
+    }
+
+    /// An SF Symbol at `pointSize`, tinted. Symbols are templates, so the tint
+    /// is painted over the glyph inside its own small bitmap rather than over
+    /// the shared cell context, where it would recolour its neighbours.
+    private static func compactSymbol(
+        _ name: String, color: NSColor, pointSize: CGFloat
+    ) -> NSImage? {
+        let key = "\(name)|\(pointSize)|\(color)"
+        if let cached = compactSymbolCache[key] { return cached }
+        guard
+            let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
+            let symbol = base.withSymbolConfiguration(
+                .init(pointSize: pointSize, weight: .regular))
+        else { return nil }
+        let image = MenuBarReadoutImage.render(
+            width: symbol.size.width, height: symbol.size.height
+        ) { size in
+            let rect = NSRect(origin: .zero, size: size)
+            symbol.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+        }
+        compactSymbolCache[key] = image
+        return image
+    }
+
+    /// A symbol centred on the bar's centre line.
+    private static func drawCompactSymbol(_ image: NSImage, x: CGFloat) {
+        let size = image.size
+        image.draw(
+            in: NSRect(
+                x: x, y: pixelAligned(compactMidY - size.height / 2), width: size.width,
+                height: size.height))
+    }
+
+    /// One line of text with its cap height centred on the bar, which is how
+    /// the system's own menu bar items sit. `baseline` overrides the centring
+    /// for the stacked rows.
+    private static func drawCompactText(
+        _ text: String, font: NSFont, color: NSColor, x: CGFloat, width: CGFloat,
+        baseline: CGFloat? = nil, alignment: NSTextAlignment = .left
+    ) {
+        guard !text.isEmpty else { return }
+        let style = NSMutableParagraphStyle()
+        style.alignment = alignment
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: color, .paragraphStyle: style,
+        ]
+        // Without `.usesLineFragmentOrigin` the rect's origin is the baseline.
+        let y = baseline ?? pixelAligned(compactMidY - font.capHeight / 2)
+        NSAttributedString(string: text, attributes: attributes).draw(
+            with: CGRect(x: x, y: y, width: width, height: font.pointSize + 2))
+    }
+
+    /// Round to the device pixel grid, so text and symbols land crisp rather
+    /// than smeared across two rows of pixels.
+    private static func pixelAligned(_ value: CGFloat) -> CGFloat {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        return (value * scale).rounded() / scale
     }
 
     // MARK: - Mini (Kit/Widgets/Mini.swift)
@@ -648,7 +1011,8 @@ enum StatsMenuBarWidgets {
     /// The outline at `x` within the current cell, so it can be drawn on its
     /// own or after the figures that describe it.
     private static func drawBatteryOutline(
-        _ readout: CombinedMenuBarReadout, _ isDark: Bool, x originOffset: CGFloat
+        _ readout: CombinedMenuBarReadout, _ isDark: Bool, x originOffset: CGFloat,
+        fill: NSColor? = nil
     ) {
         let batterySize = Self.batterySize
         let borderWidth = Self.batteryBorderWidth
@@ -700,10 +1064,10 @@ enum StatsMenuBarWidgets {
                     width: max(1, maxWidth * CGFloat(charge)),
                     height: batterySize.height - offset * 2 - borderWidth * 2 - 1),
                 xRadius: 1, yRadius: 1)
-            batteryColor(
-                charge, isDark: isDark, isLowPowerMode: isLowPowerMode,
-                colored: readout.isColored
-            ).set()
+            (fill
+                ?? batteryColor(
+                    charge, isDark: isDark, isLowPowerMode: isLowPowerMode,
+                    colored: readout.isColored)).set()
             inner.fill()
         } else {
             let attributes: [NSAttributedString.Key: Any] = [

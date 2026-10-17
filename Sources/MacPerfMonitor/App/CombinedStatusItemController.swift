@@ -13,6 +13,26 @@ final class CombinedStatusItemController: NSObject {
     /// inserts the item at the default slot beside the notch, where a crowded
     /// menu bar hides it with no indication (#120).
     static let statusItemAutosaveName = "MacPerfMonitorCombined"
+    /// The room on each side of a read-out's image that faces another of
+    /// this app's read-outs, so two neighbours sit twice this apart.
+    ///
+    /// A variable-length item gets macOS's own padding, about ten points a
+    /// side, so neighbouring read-outs sat twenty points apart and a bar of
+    /// five spent a hundred points on air. Each item is sized to its image
+    /// plus this instead, which is how Stats sizes its widgets.
+    ///
+    /// The two outer ends of a row get none: macOS already draws its hover
+    /// capsule about ten points beyond them, and padding of our own on top
+    /// left the row's ends half again as roomy as the gaps inside it.
+    ///
+    /// Compact design only. Classic items stay variable length, padded the
+    /// way macOS pads them, which is how they looked before Compact.
+    private static let itemPadding: CGFloat = 4
+    /// How far apart two status item windows can be and still count as
+    /// neighbours. They touch on macOS 26; the slack allows for a system
+    /// that spaces items slightly. Any other app's item between two of ours
+    /// is far wider than this.
+    private static let neighbourTolerance: CGFloat = 8
     private static let alarmImage: NSImage = {
         let size = NSSize(width: 12, height: 12)
         let image = NSImage(size: size, flipped: false) { rect in
@@ -299,14 +319,17 @@ final class CombinedStatusItemController: NSObject {
     /// the same warning across every read-out.
     private func refreshSeparateItems() {
         let metrics = configuration.selectedMetrics
-        let styles = configuration.widgetStyles
+        let styles = configuration.effectiveStyles
         // Each item has its own button, so each resolves the bar's appearance
         // for itself below; this seeds them with the first one's.
         let readouts = CombinedMenuBarReadouts.current(
-            for: metrics, styles: styles, model: model, colors: configuration.colorStates,
-            isDark: anyButton?.effectiveAppearance.isDarkMenuBar ?? true)
+            for: metrics, styles: styles, model: model, colors: configuration.effectiveColorStates,
+            isDark: anyButton?.effectiveAppearance.isDarkMenuBar ?? true,
+            textSize: configuration.textSize)
         let alarmCount = configuration.showsAlarmMarker ? model.activeAlerts.count : 0
         let alarmHost = readouts.first(where: \.isAlarm)?.metric ?? metrics.first
+        let fitsItems = configuration.design == .compact
+        let neighbours = fitsItems ? neighbouringSides() : [:]
 
         for readout in readouts {
             let metric = readout.metric
@@ -314,14 +337,20 @@ final class CombinedStatusItemController: NSObject {
             let style = CombinedMenuBarImage.style(for: metric, in: styles)
             let isDark = button.effectiveAppearance.isDarkMenuBar
             let showsAlarm = alarmCount > 0 && metric == alarmHost
+            let sides = neighbours[metric] ?? (left: false, right: false)
+            let leading = sides.left ? Self.itemPadding : 0
+            let trailing = sides.right ? Self.itemPadding : 0
             let signature =
-                "\(isDark ? "dk" : "lt")|\(showsAlarm ? alarmCount : 0)|"
+                "\(isDark ? "dk" : "lt")|\(showsAlarm ? alarmCount : 0)|\(leading),\(trailing)|"
                 + readoutSignature(readout, style: style)
             guard separateSignatures[metric] != signature else { continue }
 
-            button.image = CombinedMenuBarImage.image(
-                readout: readout, style: style, isDark: isDark)
+            let image = CombinedMenuBarImage.image(
+                readout: readout, style: style, isDark: isDark, leading: leading,
+                trailing: trailing)
+            button.image = image
             button.imagePosition = showsAlarm ? .imageLeading : .imageOnly
+            item.length = Self.length(for: image, showsAlarm: showsAlarm, fitted: fitsItems)
             button.attributedTitle = alarmTitle(count: showsAlarm ? alarmCount : 0)
             let summary = summaryText(for: readout)
             let alarmSuffix =
@@ -360,9 +389,11 @@ final class CombinedStatusItemController: NSObject {
             .map { String(format: "%.3g", $0.value) }.joined(separator: ",")
         let rows = readout.stackRows.joined(separator: ",")
         // `isColored` rides the signature so flipping the switch repaints at
-        // once instead of waiting for a figure to move.
-        return "\(readout.isColored ? "c" : "m"):"
-            + "\(readout.metric.rawValue):\(style.rawValue):\(readout.value):\(readout.secondaryValue ?? ""):\(readout.isAlarm):\(readout.batteryCharge ?? -1):\(readout.isBatteryCharging):\(readout.isBatteryPresent):\(readout.isOnAC):\(readout.batteryTimeText ?? ""):\(readout.memoryRows?.free ?? "")/\(readout.memoryRows?.used ?? ""):\(trail):\(bars):\(rows)"
+        // once instead of waiting for a figure to move, and the compact
+        // shape's colours ride it for the same reason.
+        return "\(readout.isColored ? "c" : "m"):\(readout.compactSignature):"
+            + "\(readout.compactTextSize):"
+            + "\(readout.metric.rawValue):\(style.rawValue):\(readout.value):\(readout.secondaryValue ?? ""):\(readout.isAlarm):\(readout.batteryCharge ?? -1):\(readout.isBatteryCharging):\(readout.isBatteryPresent):\(readout.isOnAC):\(readout.isLowPowerMode):\(readout.batteryTimeText ?? ""):\(readout.memoryRows?.free ?? "")/\(readout.memoryRows?.used ?? ""):\(trail):\(bars):\(rows)"
     }
 
     private func refreshCombinedItem() {
@@ -370,11 +401,11 @@ final class CombinedStatusItemController: NSObject {
         let metrics =
             configuration.presentation == .focus
             ? [configuration.focusedMetric] : configuration.selectedMetrics
-        let styles = configuration.widgetStyles
+        let styles = configuration.effectiveStyles
         let isDark = button.effectiveAppearance.isDarkMenuBar
         let readouts = CombinedMenuBarReadouts.current(
-            for: metrics, styles: styles, model: model, colors: configuration.colorStates,
-            isDark: isDark)
+            for: metrics, styles: styles, model: model, colors: configuration.effectiveColorStates,
+            isDark: isDark, textSize: configuration.textSize)
         let alarmCount = configuration.showsAlarmMarker ? model.activeAlerts.count : 0
         let signature =
             "\(configuration.presentation.rawValue)|\(alarmCount)|\(isDark ? "dk" : "lt")|"
@@ -384,10 +415,13 @@ final class CombinedStatusItemController: NSObject {
                     style: CombinedMenuBarImage.style(for: readout.metric, in: styles))
             }.joined(separator: "|")
         guard signature != shownSignature else { return }
-        button.image = CombinedMenuBarImage.image(
+        let image = CombinedMenuBarImage.image(
             readouts: readouts, styles: styles, presentation: configuration.presentation,
             isDark: isDark)
+        button.image = image
         button.imagePosition = alarmCount > 0 ? .imageLeading : .imageOnly
+        statusItem?.length = Self.length(
+            for: image, showsAlarm: alarmCount > 0, fitted: configuration.design == .compact)
         button.attributedTitle = alarmTitle(count: alarmCount)
         let summary = readouts.map { summaryText(for: $0) }.joined(separator: ", ")
         let alarmSuffix =
@@ -395,6 +429,32 @@ final class CombinedStatusItemController: NSObject {
         button.toolTip = summary + alarmSuffix
         button.setAccessibilityLabel("\(AppInfo.displayName), \(summary)\(alarmSuffix)")
         shownSignature = signature
+    }
+
+    /// A status item's length. Fitted (the Compact design), exactly its
+    /// image, which already carries whatever padding it needs; otherwise
+    /// variable, so macOS pads it as it pads any item. An item carrying the
+    /// alarm badge stays variable either way, so AppKit measures the badge
+    /// title beside the image.
+    private static func length(for image: NSImage, showsAlarm: Bool, fitted: Bool) -> CGFloat {
+        fitted && !showsAlarm ? image.size.width : NSStatusItem.variableLength
+    }
+
+    /// For each separate item, whether another of this app's items sits
+    /// directly against its left and its right side, read from where macOS
+    /// has actually placed them. The order is the user's (they Command-drag
+    /// the items), so it cannot be worked out from the selection. An item
+    /// not yet on screen has no neighbours, and the next refresh corrects it
+    /// once it is.
+    private func neighbouringSides() -> [MenuBarMetric: (left: Bool, right: Bool)] {
+        let frames = separateItems.compactMapValues { $0.button?.window?.frame }
+        return frames.mapValues { frame in
+            let others = frames.values.filter { $0 != frame }
+            return (
+                left: others.contains { abs($0.maxX - frame.minX) <= Self.neighbourTolerance },
+                right: others.contains { abs(frame.maxX - $0.minX) <= Self.neighbourTolerance }
+            )
+        }
     }
 
     private func alarmTitle(count: Int) -> NSAttributedString {
@@ -508,7 +568,7 @@ final class CombinedStatusItemController: NSObject {
             configuration.presentation == .focus
             ? [configuration.focusedMetric] : configuration.selectedMetrics
         guard !metrics.isEmpty else { return nil }
-        let styles = configuration.widgetStyles
+        let styles = configuration.effectiveStyles
         let readouts = CombinedMenuBarReadouts.current(
             for: metrics, styles: styles, model: model)
         guard let local = clickLocation(in: button) else {
