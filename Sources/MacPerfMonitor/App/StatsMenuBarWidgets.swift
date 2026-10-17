@@ -124,8 +124,6 @@ enum StatsMenuBarWidgets {
         let glyphGap: CGFloat
         /// Between two symbol-and-figure pairs in one cell (the sensors).
         let pairGap: CGFloat
-        /// Between the battery's charge and its time estimate.
-        let timeGap: CGFloat
 
         init(textSize: CGFloat) {
             scale = textSize / Self.referenceSize
@@ -136,7 +134,6 @@ enum StatsMenuBarWidgets {
             symbolPointSize = 11.5 * scale
             glyphGap = 3 * scale
             pairGap = 6 * scale
-            timeGap = 4 * scale
         }
     }
 
@@ -275,35 +272,44 @@ enum StatsMenuBarWidgets {
         }
     }
 
-    /// The battery: its outline, the charge, and the time estimate. The time
-    /// is time to full while charging (the bolt in the outline says which)
-    /// and time left on battery. macOS gives no estimate while the charge is
-    /// held at a limit, or for a while after the power source changes, and
-    /// then the time is simply left out instead of printing "n/a".
+    /// The battery: its outline, then the charge with the time estimate
+    /// stacked under it, as the Classic battery details shape stacks them.
+    /// The time is time to full while charging (the bolt in the outline says
+    /// which) and time left on battery. macOS gives no estimate while the
+    /// charge is held at a limit, or for a while after the power source
+    /// changes; then the charge stands alone on one line at the full figure
+    /// size instead of sitting over "n/a".
     ///
     /// The outline's fill is coloured by charge, or mint in Low Power Mode
     /// (see `compactBatteryFill`).
     private static func compactBattery(
         _ readout: CombinedMenuBarReadout, _ isDark: Bool, _ metrics: CompactMetrics
     ) -> Cell {
-        let font = metrics.valueFont
         let color = compactColor(readout.verdict, readout, isDark)
         let fill = compactBatteryFill(
             charge: readout.batteryCharge ?? 1, isLowPowerMode: readout.isLowPowerMode,
             isColored: readout.isColored, isDark: isDark)
-        let reserved = readout.valueTemplate.map { widthOfString($0, font: font) } ?? 0
-        var percent = readout.value
-        if reserved > 0, widthOfString(percent, font: font) > reserved.rounded(.up) {
-            percent = trimUnit(percent)
-        }
-        let percentWidth = max(reserved, widthOfString(percent, font: font)).rounded(.up)
+        let textX = (batteryOutlineWidth * metrics.scale + metrics.glyphGap).rounded(.up)
         let time = readout.batteryTimeText
-        let timeWidth = time.map {
-            max(widthOfString("0:00", font: font), widthOfString($0, font: font)).rounded(.up)
+        // Two rows have the network rows' size, one row the full figure size.
+        let font = time == nil ? metrics.valueFont : metrics.rowFont
+        var percent = readout.value
+        let textWidth: CGFloat
+        if let time {
+            // Reserved for "100%" and a two-digit hour, so the column holds
+            // still as the charge and the estimate move.
+            textWidth =
+                ([percent, time, "100%", "00:00"].map { widthOfString($0, font: font) }
+                .max() ?? 0).rounded(.up)
+        } else {
+            let reserved = readout.valueTemplate.map { widthOfString($0, font: font) } ?? 0
+            if reserved > 0, widthOfString(percent, font: font) > reserved.rounded(.up) {
+                percent = trimUnit(percent)
+            }
+            textWidth = max(reserved, widthOfString(percent, font: font)).rounded(.up)
         }
-        let percentX = (batteryOutlineWidth * metrics.scale + metrics.glyphGap).rounded(.up)
-        let width = percentX + percentWidth + (timeWidth.map { metrics.timeGap + $0 } ?? 0)
-        let timeColor = textColor(isDark).withAlphaComponent(0.55)
+        let width = textX + textWidth
+        let timeColor = textColor(isDark).withAlphaComponent(0.7)
 
         return Cell(width: width.rounded(.up)) { originX in
             translated(originX) {
@@ -317,12 +323,17 @@ enum StatsMenuBarWidgets {
                     drawBatteryOutline(readout, isDark, x: 0, fill: fill)
                     context.restoreGState()
                 }
-                drawCompactText(percent, font: font, color: color, x: percentX, width: percentWidth)
-                if let time, let timeWidth {
-                    drawCompactText(
-                        time, font: font, color: timeColor,
-                        x: percentX + percentWidth + metrics.timeGap, width: timeWidth)
+                guard let time else {
+                    drawCompactText(percent, font: font, color: color, x: textX, width: textWidth)
+                    return
                 }
+                let lineGap: CGFloat = 2.5
+                drawCompactText(
+                    percent, font: font, color: color, x: textX, width: textWidth,
+                    baseline: pixelAligned(compactMidY + lineGap / 2))
+                drawCompactText(
+                    time, font: font, color: timeColor, x: textX, width: textWidth,
+                    baseline: pixelAligned(compactMidY - lineGap / 2 - font.capHeight))
             }
         }
     }

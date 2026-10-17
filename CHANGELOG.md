@@ -56,9 +56,10 @@ Notable changes to Mac Performance Monitor. This project follows
   - Network stacks upload over download behind arrows; only the arrows are
     tinted (blue down, red up), and only while that direction is moving.
   - The battery icon is coloured by charge (green above 40%, yellow from 20%
-    to 40%, red below 20%) and turns mint in Low Power Mode. It shows the time
-    to full while charging and the time left on battery, and leaves the time
-    out instead of printing "n/a" when macOS has no estimate.
+    to 40%, red below 20%) and turns mint in Low Power Mode. Under the charge
+    it stacks the time to full while charging or the time left on battery; when
+    macOS has no estimate the charge stands alone instead of sitting over
+    "n/a".
   - Sensors pair each figure with the symbol of its kind.
   - Items are sized to their content, so read-outs sit 8 pt apart instead of
     the roughly 20 pt macOS pads each item with.

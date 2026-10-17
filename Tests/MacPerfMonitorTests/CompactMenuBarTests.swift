@@ -137,20 +137,45 @@ final class CompactMenuBarTests: XCTestCase {
         XCTAssertEqual(width("26%"), width("100%"))
     }
 
-    func testBatteryShowsItsTimeWhileChargingAndDischargingAndNothingWithoutOne() {
-        func width(time: String?, charging: Bool) -> CGFloat {
+    func testBatteryStacksItsTimeUnderTheChargeAndHoldsItsWidth() throws {
+        func readout(time: String?, charging: Bool) -> CombinedMenuBarReadout {
             var readout = CombinedMenuBarReadout(
                 metric: .energy, value: "80%", isAlarm: false, batteryCharge: 0.8,
                 isBatteryCharging: charging, isBatteryPresent: true, isOnAC: charging,
                 batteryTimeText: time)
             readout.valueTemplate = MenuBarMetric.energy.menuBarValueTemplate
-            return StatsMenuBarWidgets.cell(for: readout, style: .compact, isDark: true).width
+            return readout
         }
-        let withoutTime = width(time: nil, charging: true)
-        XCTAssertGreaterThan(width(time: "0:52", charging: true), withoutTime)
-        XCTAssertGreaterThan(width(time: "4:28", charging: false), withoutTime)
-        // No "n/a" placeholder: a missing estimate takes no room at all.
-        XCTAssertEqual(withoutTime, width(time: nil, charging: false))
+        func width(_ readout: CombinedMenuBarReadout) -> CGFloat {
+            StatsMenuBarWidgets.cell(for: readout, style: .compact, isDark: true).width
+        }
+        /// Opaque pixels in the band where the lower row sits (1.5 to 5.5 pt up
+        /// from the bottom), right of the battery outline. The one-line charge
+        /// starts above it, so only a stacked time puts ink there.
+        func lowerRowInk(_ readout: CombinedMenuBarReadout) throws -> Int {
+            let image = CombinedMenuBarImage.image(readout: readout, style: .compact)
+            let rep = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+            let scale = CGFloat(rep.pixelsHigh) / image.size.height
+            let rows =
+                Int((image.size.height - 5.5) * scale)..<Int((image.size.height - 1.5) * scale)
+            let columns = Int(32 * scale)..<rep.pixelsWide
+            return rows.reduce(0) { total, y in
+                total
+                    + columns.filter { (rep.colorAt(x: $0, y: y)?.alphaComponent ?? 0) > 0.3 }.count
+            }
+        }
+
+        let charging = readout(time: "0:52", charging: true)
+        let discharging = readout(time: "4:28", charging: false)
+        let noEstimate = readout(time: nil, charging: true)
+        // The time shows both ways, under the charge.
+        XCTAssertGreaterThan(try lowerRowInk(charging), 0)
+        XCTAssertGreaterThan(try lowerRowInk(discharging), 0)
+        // No "n/a" placeholder: without an estimate nothing sits in the lower row.
+        XCTAssertEqual(try lowerRowInk(noEstimate), 0)
+        // The item keeps one width whether or not there is an estimate.
+        XCTAssertEqual(width(charging), width(discharging))
+        XCTAssertEqual(width(charging), width(noEstimate))
     }
 
     func testTextSizePersistsAndFallsBackToTheMenuBarSize() throws {
