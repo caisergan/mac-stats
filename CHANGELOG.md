@@ -56,14 +56,17 @@ Notable changes to Mac Performance Monitor. This project follows
   - Network stacks upload over download behind arrows; only the arrows are
     tinted (blue down, red up), and only while that direction is moving.
   - The battery icon is coloured by charge (green above 40%, yellow from 20%
-    to 40%, red below 20%) and turns mint with a leaf in Low Power Mode. It
-    shows the time to full while charging and the time left on battery, and
-    leaves the time out instead of printing "n/a" when macOS has no estimate.
+    to 40%, red below 20%) and turns mint, with a leaf beside it, in Low
+    Power Mode. It shows the time to full while charging and the time left on
+    battery, and leaves the time out instead of printing "n/a" when macOS has
+    no estimate.
   - Sensors pair each figure with the symbol of its kind.
   - Items are sized to their content, so read-outs sit 8 pt apart instead of
     the roughly 20 pt macOS pads each item with.
   - A Text size setting (10 to 15 pt, default 13) scales the figures, symbols
     and battery together.
+- Menu bar read-outs no longer show a tooltip repeating their figures, in
+  either design. VoiceOver still reads the same summary.
 - Every chart in the menu bar panel answers the pointer too. Hover the
   processor, memory-pressure, GPU, charge, power, temperature, network or disk
   graph and a marker pins to the sample under the pointer, with a card giving

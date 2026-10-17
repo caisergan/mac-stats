@@ -355,7 +355,9 @@ final class CombinedStatusItemController: NSObject {
             let summary = summaryText(for: readout)
             let alarmSuffix =
                 showsAlarm ? ", " + t("Active alerts: %@", alarmCount.formatted()) : ""
-            button.toolTip = summary + alarmSuffix
+            // No tooltip: the figures are already on the bar, and a box
+            // repeating them only covered what sat below it. The summary
+            // stays as the accessibility label, which VoiceOver reads.
             button.setAccessibilityLabel("\(AppInfo.displayName), \(summary)\(alarmSuffix)")
             separateSignatures[metric] = signature
         }
@@ -426,7 +428,8 @@ final class CombinedStatusItemController: NSObject {
         let summary = readouts.map { summaryText(for: $0) }.joined(separator: ", ")
         let alarmSuffix =
             alarmCount > 0 ? ", " + t("Active alerts: %@", alarmCount.formatted()) : ""
-        button.toolTip = summary + alarmSuffix
+        // No tooltip, as for the separate items: the summary is the
+        // accessibility label only.
         button.setAccessibilityLabel("\(AppInfo.displayName), \(summary)\(alarmSuffix)")
         shownSignature = signature
     }
