@@ -281,11 +281,8 @@ enum StatsMenuBarWidgets {
     /// held at a limit, or for a while after the power source changes, and
     /// then the time is simply left out instead of printing "n/a".
     ///
-    /// The outline's fill is coloured by charge (see `compactBatteryFill`).
-    /// In Low Power Mode a mint leaf leads the item, the way every other
-    /// compact read-out leads with its symbol. Drawn inside the outline the
-    /// leaf had to shrink below the fill's height and read as a smudge; beside
-    /// it, it is full size and leaves the middle to the charging bolt.
+    /// The outline's fill is coloured by charge, or mint in Low Power Mode
+    /// (see `compactBatteryFill`).
     private static func compactBattery(
         _ readout: CombinedMenuBarReadout, _ isDark: Bool, _ metrics: CompactMetrics
     ) -> Cell {
@@ -294,13 +291,6 @@ enum StatsMenuBarWidgets {
         let fill = compactBatteryFill(
             charge: readout.batteryCharge ?? 1, isLowPowerMode: readout.isLowPowerMode,
             isColored: readout.isColored, isDark: isDark)
-        let leaf =
-            readout.isLowPowerMode
-            ? compactSymbol(
-                "leaf.fill", color: readout.isColored ? .systemMint : textColor(isDark),
-                pointSize: metrics.symbolPointSize * 0.9)
-            : nil
-        let batteryX = leaf.map { ($0.size.width + metrics.glyphGap).rounded(.up) } ?? 0
         let reserved = readout.valueTemplate.map { widthOfString($0, font: font) } ?? 0
         var percent = readout.value
         if reserved > 0, widthOfString(percent, font: font) > reserved.rounded(.up) {
@@ -311,19 +301,17 @@ enum StatsMenuBarWidgets {
         let timeWidth = time.map {
             max(widthOfString("0:00", font: font), widthOfString($0, font: font)).rounded(.up)
         }
-        let percentX =
-            batteryX + (batteryOutlineWidth * metrics.scale + metrics.glyphGap).rounded(.up)
+        let percentX = (batteryOutlineWidth * metrics.scale + metrics.glyphGap).rounded(.up)
         let width = percentX + percentWidth + (timeWidth.map { metrics.timeGap + $0 } ?? 0)
         let timeColor = textColor(isDark).withAlphaComponent(0.55)
 
         return Cell(width: width.rounded(.up)) { originX in
             translated(originX) {
-                if let leaf { drawCompactSymbol(leaf, x: 0) }
                 // The outline is drawn at Stats' fixed size, so it is scaled
                 // about the bar's centre line to keep pace with the text.
                 if let context = NSGraphicsContext.current?.cgContext {
                     context.saveGState()
-                    context.translateBy(x: batteryX, y: compactMidY)
+                    context.translateBy(x: 0, y: compactMidY)
                     context.scaleBy(x: metrics.scale, y: metrics.scale)
                     context.translateBy(x: 0, y: -compactMidY)
                     drawBatteryOutline(readout, isDark, x: 0, fill: fill)
@@ -340,8 +328,8 @@ enum StatsMenuBarWidgets {
     }
 
     /// The Compact battery's fill: green above 40%, yellow from 20% to 40%,
-    /// red below 20%, and a mint green in Low Power Mode, which the leaf
-    /// beside it names. With the colour switch off the fill is the bar's
+    /// red below 20%, and a mint green in Low Power Mode whatever the charge.
+    /// With the colour switch off the fill is the bar's
     /// own colour, except that below 20% stays red: a flat battery is a
     /// warning, not decoration, as in the Classic battery shapes.
     nonisolated static func compactBatteryFill(
