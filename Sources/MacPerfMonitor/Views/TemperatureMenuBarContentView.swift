@@ -1,4 +1,3 @@
-import Charts
 import MacPerfMonitorCore
 import SwiftUI
 
@@ -8,6 +7,8 @@ import SwiftUI
 /// belong to domains, and the Energy tab's Thermals section holds the history.
 struct TemperatureMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuClock: MenuClock
 
     var embedded = false
@@ -55,52 +56,14 @@ struct TemperatureMenuBarContentView: View {
         }
     }
 
-    /// The recent CPU die trend from the in-memory system ring, the same
-    /// live-window shape as the GPU panel's utilization sparkline.
+    /// The CPU die trend over the panel's chart range, the same shape as the
+    /// GPU panel's utilization sparkline.
     private var sparkline: some View {
-        let capacity = 60
-        // Paired with their timestamps before the readings without a die
-        // temperature are dropped, so the hover read-out dates the sample it
-        // quotes rather than the tick that happens to sit at that index.
-        let samples = model.systemHistory.elements().suffix(capacity).compactMap { sample in
-            sample.cpuDieC.map { (date: sample.timestamp, value: $0) }
-        }
-        let values = samples.map(\.value)
-        let points = Array(values.enumerated())
-        return Chart(points, id: \.offset) { point in
-            let x = LiveChartGeometry.normalizedSlot(
-                index: point.offset, count: points.count, capacity: capacity)
-            AreaMark(x: .value("t", x), y: .value("c", point.element))
-                .foregroundStyle(ThermalStyle.cpu.opacity(0.18))
-            LineMark(x: .value("t", x), y: .value("c", point.element))
-                .foregroundStyle(ThermalStyle.cpu)
-                .interpolationMethod(.linear)
-        }
-        .chartYScale(domain: 20...sparklineTop)
-        .chartXScale(domain: 0...1)
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .frame(height: 38)
-        .overlay {
-            if values.count > 1 {
-                MenuChartHoverOverlay(
-                    series: [
-                        MenuChartSeries(
-                            name: t("CPU die"), color: ThermalStyle.cpu, values: values,
-                            format: { TemperatureFormat.string($0) })
-                    ],
-                    dates: samples.map(\.date), sampleCapacity: capacity,
-                    scale: .domain(20...sparklineTop),
-                    // Both axes are hidden, so this chart plots edge to edge.
-                    plotRect: { CGRect(origin: .zero, size: $0) })
-            }
-        }
-        .opacity(points.count > 1 ? 1 : 0)
-    }
-
-    private var sparklineTop: Double {
-        let peak = model.systemHistory.elements().suffix(60).compactMap(\.cpuDieC).max() ?? 60
-        return max(60, (peak / 10).rounded(.up) * 10 + 10)
+        let series = model.menuTrend(.cpuDie, range: chartRange)
+        let top = max(60, ((series.top ?? 60) / 10).rounded(.up) * 10 + 10)
+        return MenuSparklineChart(
+            series: series, color: ThermalStyle.cpu, domain: 20...top, name: t("CPU die"),
+            format: { TemperatureFormat.string($0) })
     }
 
     private func details(_ system: SystemSample) -> some View {

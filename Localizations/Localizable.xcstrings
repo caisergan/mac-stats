@@ -8479,36 +8479,6 @@
         }
       }
     },
-    "Last 60 seconds" : {
-      "comment" : "ANE menu charts and GPU awake history. AI-generated translations need native review.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Letzte 60 Sekunden"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last 60 seconds"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "60 dernières secondes"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近 60 秒"
-          }
-        }
-      }
-    },
     "GPU awake" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -87972,6 +87942,96 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "“跟随系统”遵循“系统设置”>“通用”>“语言与地区”>“温度”。历史记录始终以摄氏度保存，因此更改此项只会改变温度的显示方式。"
+          }
+        }
+      }
+    },
+    "Chart range" : {
+      "comment" : "Label for the menu bar panel's chart time range picker, in the panel and in Settings",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diagrammzeitraum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chart range"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plage du graphique"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图表范围"
+          }
+        }
+      }
+    },
+    "How much history the charts show. One minute plots every sample; the longer ranges plot averages with a band out to the lowest and highest readings." : {
+      "comment" : "Tooltip on the menu bar panel's chart range picker",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wie viel Verlauf die Diagramme zeigen. Eine Minute zeigt jeden Messwert; die längeren Zeiträume zeigen Mittelwerte mit einem Band bis zum niedrigsten und höchsten Wert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How much history the charts show. One minute plots every sample; the longer ranges plot averages with a band out to the lowest and highest readings."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quantité d’historique affichée par les graphiques. Une minute trace chaque mesure ; les plages plus longues tracent des moyennes, avec une bande jusqu’aux valeurs les plus basses et les plus hautes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图表显示的历史时长。1 分钟绘制每个采样；更长的范围绘制平均值，并以色带标出最低和最高读数。"
+          }
+        }
+      }
+    },
+    "How much history the panel's charts show. One minute plots every sample; the longer ranges plot averages with a band out to the lowest and highest readings. The panel has the same control above its charts." : {
+      "comment" : "Settings caption under the menu bar panel's chart range picker",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wie viel Verlauf die Diagramme im Menüleistenfenster zeigen. Eine Minute zeigt jeden Messwert; die längeren Zeiträume zeigen Mittelwerte mit einem Band bis zum niedrigsten und höchsten Wert. Dieselbe Einstellung gibt es im Fenster über den Diagrammen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How much history the panel's charts show. One minute plots every sample; the longer ranges plot averages with a band out to the lowest and highest readings. The panel has the same control above its charts."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quantité d’historique affichée par les graphiques du panneau. Une minute trace chaque mesure ; les plages plus longues tracent des moyennes, avec une bande jusqu’aux valeurs les plus basses et les plus hautes. Le panneau propose le même réglage au-dessus de ses graphiques."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板图表显示的历史时长。1 分钟绘制每个采样；更长的范围绘制平均值，并以色带标出最低和最高读数。面板中图表上方也有同样的控制。"
           }
         }
       }

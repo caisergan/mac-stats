@@ -1,15 +1,17 @@
 import AppKit
-import Charts
 import MacPerfMonitorCore
 import SwiftUI
 
 struct ANEMenuHistory {
-    static let duration: TimeInterval = 60
+    static let duration: TimeInterval = MenuChartRange.oneMinute.seconds
 
     let domain: ClosedRange<Date>
     let time: [TrendPoint]
     let power: [TrendPoint]
     let hasPartialTime: Bool
+    /// The bucket width on the overview ranges, nil for raw samples. Sets how
+    /// far apart two points may sit before the line breaks into a gap.
+    private var bucket: TimeInterval?
 
     init(samples: some Sequence<SystemSample>, now: Date) {
         let domain = now.addingTimeInterval(-Self.duration)...now
@@ -30,6 +32,22 @@ struct ANEMenuHistory {
             }
             return $0.aneSampleIsPartial != false
         }
+    }
+
+    /// The overview ranges: bucket means over `range`. Coverage is a fact about
+    /// the readings arriving now, so it comes from the raw window either way.
+    init(
+        time: MenuTrendSeries, power: MenuTrendSeries, range: MenuChartRange, now: Date,
+        hasPartialTime: Bool
+    ) {
+        domain = now.addingTimeInterval(-range.seconds)...now
+        func points(_ series: MenuTrendSeries) -> [TrendPoint] {
+            zip(series.dates, series.values).map { TrendPoint(date: $0, value: $1) }
+        }
+        self.time = points(time)
+        self.power = points(power)
+        self.hasPartialTime = hasPartialTime
+        bucket = range.bucketSeconds
     }
 
     var timeChart: TrendModel {
@@ -61,8 +79,8 @@ struct ANEMenuHistory {
         model.yFormat = unit.format
         model.detailFormat = unit.format
         model.leftGutter = 68
-        model.statisticsInterval = 1
-        model.gapThreshold = 3
+        model.statisticsInterval = bucket ?? 1
+        model.gapThreshold = (bucket ?? 1) * 3
         model.accessibilityLabel = name
         return model
     }
@@ -88,9 +106,6 @@ struct ANEMenuCharts: View {
                 status: ANEPowerPresentation.status(gpu), chart: history.powerChart, color: .pink
             )
             .help("ANE power requires elevated coverage. ANE Time works without it.")
-            Text("Last 60 seconds")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -136,6 +151,8 @@ struct ANEMenuCharts: View {
 /// scan cadence its status item registers for.
 struct GPUMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
     @EnvironmentObject private var menuClock: MenuClock
 
@@ -161,10 +178,7 @@ struct GPUMenuBarContentView: View {
                         Divider()
                         bars(gpu)
                         Divider()
-                        ANEMenuCharts(
-                            history: ANEMenuHistory(
-                                samples: model.systemHistory.elements(), now: Date()),
-                            gpu: gpu)
+                        ANEMenuCharts(history: aneHistory, gpu: gpu)
                         Divider()
                         details(gpu)
                         Divider()
@@ -213,38 +227,19 @@ struct GPUMenuBarContentView: View {
     }
 
     private var sparkline: some View {
-        let values = model.gpuUtilizationHistory
-        let points = Array(values.enumerated())
-        let capacity = SamplerModel.gpuHistoryCapacity
-        return Chart(points, id: \.offset) { point in
-            let x = LiveChartGeometry.normalizedSlot(
-                index: point.offset, count: points.count, capacity: capacity)
-            AreaMark(x: .value("t", x), y: .value("u", point.element))
-                .foregroundStyle(Color.accentColor.opacity(0.18))
-            LineMark(x: .value("t", x), y: .value("u", point.element))
-                .foregroundStyle(Color.accentColor)
-                .interpolationMethod(.linear)
-        }
-        .chartYScale(domain: 0...100)
-        .chartXScale(domain: 0...1)
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .frame(height: 38)
-        .overlay {
-            if values.count > 1 {
-                MenuChartHoverOverlay(
-                    series: [
-                        MenuChartSeries(
-                            name: t("GPU"), color: .accentColor, values: values,
-                            format: { "\(Int($0.rounded()))%" })
-                    ],
-                    dates: model.gpuUtilizationTimestamps, sampleCapacity: capacity,
-                    scale: .domain(0...100),
-                    // Both axes are hidden, so this chart plots edge to edge.
-                    plotRect: { CGRect(origin: .zero, size: $0) })
-            }
-        }
-        .opacity(points.count > 1 ? 1 : 0)
+        MenuSparklineChart(
+            series: model.menuTrend(.gpuUtilization, range: chartRange), color: .accentColor,
+            domain: 0...100, name: t("GPU"), format: { "\(Int($0.rounded()))%" })
+    }
+
+    private var aneHistory: ANEMenuHistory {
+        let now = Date()
+        let raw = ANEMenuHistory(samples: model.systemHistory.elements(), now: now)
+        guard chartRange.bucketSeconds != nil else { return raw }
+        return ANEMenuHistory(
+            time: model.menuTrend(.aneTime, range: chartRange),
+            power: model.menuTrend(.anePower, range: chartRange), range: chartRange, now: now,
+            hasPartialTime: raw.hasPartialTime)
     }
 
     // MARK: - Activity bars

@@ -8,6 +8,15 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Added
 
+- A chart range for the menu bar panel: 1 min, 5 min, 15 min or 1 hr, picked
+  beside Alerts at the top of the panel or in Settings, and shared by every
+  tab. One minute plots every sample; the longer ranges plot averages inside
+  a band out to the lowest and highest readings, so a brief spike still shows
+  in an hour long chart. With history logging on, the longer ranges open on
+  the recorded last hour rather than an empty plot after a launch, and time
+  the app was not running or the Mac was asleep shows as a gap. Before this
+  each tab covered a different, unlabelled span (15 minutes for CPU, a minute
+  for GPU and temperature), and it shrank as the refresh rate rose.
 - Network history on the Network tab. Transferred amounts (not just rates)
   are now recorded per bucket: totals for the machine, per interface, per app
   and, with the new opt-in connection recording, per remote host. A History

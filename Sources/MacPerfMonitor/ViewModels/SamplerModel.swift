@@ -56,6 +56,12 @@ final class SamplerModel: ObservableObject {
     /// never the full per-process arrays, to stay within the memory budget.
     private(set) var systemHistory: RingBuffer<SystemSample>
 
+    /// The last hour of the panel chart metrics in five second buckets, for
+    /// the menu bar panel's longer chart ranges. Fed on the same ticks as
+    /// `systemHistory`, so it fills whether or not history logging is on, and
+    /// seeded from the recorded hour at launch when it is. Main thread only.
+    private var menuTrendHistory = MenuTrendHistory()
+
     /// Recent per-process trail (most recent last). Carries footprint for the
     /// menubar sparklines plus CPU, file-descriptor and disk counters, so the
     /// detail view can seed all of its charts the instant a process is opened —
@@ -121,10 +127,12 @@ final class SamplerModel: ObservableObject {
     /// off. Touched only on the main thread; reused `cpuSmoothingTicks` as the window.
     private var recentGPUSamples: [GPUSample] = []
     /// Longer ring of GPU utilization (0–100) for the panel's usage-history
-    /// sparkline (~last minute), timestamped so the panel's hover read-out can
-    /// date the sample it quotes. Main thread only; emptied when GPU is off.
+    /// sparkline (the last minute), timestamped so the panel's hover read-out
+    /// can date the sample it quotes. Main thread only; emptied when GPU is off.
     private var gpuHistoryRing: [(date: Date, utilization: Double)] = []
-    static let gpuHistoryCapacity = 60
+    /// How far back `gpuHistoryRing` reaches: the panel's raw chart range. Kept
+    /// by time rather than count, so a 4 Hz cadence still covers a minute.
+    static let gpuHistorySpan = MenuChartRange.oneMinute.seconds
 
     /// The per-process scan cadence — the FINEST of the UI table interval and (when
     /// logging) the high-res persist interval, since the scan feeds both. O(number
@@ -648,6 +656,23 @@ final class SamplerModel: ObservableObject {
             }
         }
         DispatchQueue.main.async { self.isRunning = true }
+        seedMenuTrendHistory()
+    }
+
+    /// Fill the panel's longer chart ranges from the recorded last hour, so
+    /// they open on what the Mac was doing before launch rather than on an
+    /// empty plot. In menu-bar-only mode nothing is recorded, and they fill
+    /// from the live samples alone.
+    private func seedMenuTrendHistory() {
+        guard let store else { return }
+        readQueue.async { [weak self] in
+            guard let points = try? store.systemHistory(.oneHour), !points.isEmpty else { return }
+            var seeded = MenuTrendHistory()
+            for point in points {
+                seeded.append(at: point.date) { Self.menuTrendValue($0, of: point) }
+            }
+            DispatchQueue.main.async { self?.menuTrendHistory.prepend(seeded) }
+        }
     }
 
     func stop() {
@@ -1298,6 +1323,9 @@ final class SamplerModel: ObservableObject {
                 // battery and GPU are read directly and are fine to show.
                 if hasBaseline {
                     self.systemHistory.append(system)
+                    self.menuTrendHistory.append(at: system.timestamp) {
+                        Self.menuTrendValue($0, of: system, gpu: gpu)
+                    }
                     self.appendRecentCPU(cpu)
                     self.appendRecentNetwork(network)
                     self.appendRecentDisk(disk)
@@ -1312,9 +1340,11 @@ final class SamplerModel: ObservableObject {
                             self.recentGPUSamples.count - self.cpuSmoothingTicks)
                     }
                     self.gpuHistoryRing.append((system.timestamp, gpu.utilization))
-                    if self.gpuHistoryRing.count > Self.gpuHistoryCapacity {
-                        self.gpuHistoryRing.removeFirst(
-                            self.gpuHistoryRing.count - Self.gpuHistoryCapacity)
+                    let cutoff = system.timestamp.addingTimeInterval(-Self.gpuHistorySpan)
+                    if let keep = self.gpuHistoryRing.firstIndex(where: { $0.date > cutoff }),
+                        keep > 0
+                    {
+                        self.gpuHistoryRing.removeFirst(keep)
                     }
                 } else if !self.recentGPUSamples.isEmpty {
                     self.recentGPUSamples = []
@@ -1685,12 +1715,82 @@ final class SamplerModel: ObservableObject {
     /// nil when the GPU item is off or before the first read. Drives the popover.
     var latestGPU: GPUSample? { recentGPUSamples.last }
 
-    /// GPU utilization (0–100) history for the panel's usage-history sparkline.
-    var gpuUtilizationHistory: [Double] { gpuHistoryRing.map(\.utilization) }
+    /// One panel chart metric over the chosen range: the raw samples for the
+    /// one minute detail view, five second buckets merged to the range's width
+    /// for the longer overviews.
+    func menuTrend(_ metric: MenuTrendHistory.Metric, range: MenuChartRange) -> MenuTrendSeries {
+        guard range.bucketSeconds == nil else {
+            return menuTrendHistory.series(metric, range: range)
+        }
+        if metric == .gpuUtilization {
+            return .raw(
+                dates: gpuHistoryRing.map(\.date), values: gpuHistoryRing.map(\.utilization),
+                range: range, interval: interval)
+        }
+        // Walk back from the newest sample only as far as the range reaches:
+        // the ring holds several minutes and the detail view wants one.
+        let history = systemHistory.elements()
+        var start = history.endIndex
+        if let newest = history.last?.timestamp {
+            let cutoff = newest.addingTimeInterval(-range.seconds)
+            while start > history.startIndex, history[start - 1].timestamp > cutoff {
+                start -= 1
+            }
+        }
+        var dates: [Date] = []
+        var values: [Double] = []
+        dates.reserveCapacity(history.endIndex - start)
+        values.reserveCapacity(history.endIndex - start)
+        for sample in history[start...] {
+            guard let value = Self.menuTrendValue(metric, of: sample, gpu: nil), value.isFinite
+            else { continue }
+            dates.append(sample.timestamp)
+            values.append(value)
+        }
+        return .raw(dates: dates, values: values, range: range, interval: interval)
+    }
 
-    /// Timestamps parallel to `gpuUtilizationHistory`, for the sparkline's
-    /// hover read-out.
-    var gpuUtilizationTimestamps: [Date] { gpuHistoryRing.map(\.date) }
+    /// What a recorded point contributes to a panel chart metric. The record
+    /// keeps no whole-machine power, so that chart fills from live ticks only.
+    static func menuTrendValue(
+        _ metric: MenuTrendHistory.Metric, of point: SystemHistoryPoint
+    ) -> Double? {
+        switch metric {
+        case .cpuLoad: return point.cpuLoad * 100
+        case .memoryPressure: return point.pressurePercent
+        case .batteryCharge: return point.batteryCharge
+        case .systemPower: return nil
+        case .networkIn: return point.networkInBytesPerSec
+        case .networkOut: return point.networkOutBytesPerSec
+        case .diskRead: return point.diskReadBytesPerSec
+        case .diskWrite: return point.diskWriteBytesPerSec
+        case .cpuDie: return point.cpuDieC
+        case .gpuUtilization: return point.gpuUtilization
+        case .aneTime: return point.aneTimeMillisecondsPerSecond.flatMap { $0 >= 0 ? $0 : nil }
+        case .anePower: return point.anePowerWatts
+        }
+    }
+
+    /// What one tick contributes to a panel chart metric, in the unit the chart
+    /// plots. Nil where the tick did not measure it.
+    static func menuTrendValue(
+        _ metric: MenuTrendHistory.Metric, of system: SystemSample, gpu: GPUSample?
+    ) -> Double? {
+        switch metric {
+        case .cpuLoad: return system.cpuLoad * 100
+        case .memoryPressure: return system.pressurePercent
+        case .batteryCharge: return system.batteryCharge
+        case .systemPower: return system.batterySystemPowerWatts
+        case .networkIn: return system.networkInBytesPerSec
+        case .networkOut: return system.networkOutBytesPerSec
+        case .diskRead: return system.diskReadBytesPerSec
+        case .diskWrite: return system.diskWriteBytesPerSec
+        case .cpuDie: return system.cpuDieC
+        case .gpuUtilization: return gpu?.utilization
+        case .aneTime: return system.aneTimeMillisecondsPerSecond.flatMap { $0 >= 0 ? $0 : nil }
+        case .anePower: return system.reportedANEPowerWatts
+        }
+    }
 
     /// GPU utilization (0–100) smoothed over the ~5 s window, so the menubar icon
     /// figure settles rather than jumping each tick. nil when GPU is off.
@@ -1732,27 +1832,10 @@ final class SamplerModel: ObservableObject {
         recentDiskSample.map { ($0.readBytesPerSec, $0.writeBytesPerSec) }
     }
 
-    func diskReadTrail() -> [Double] {
-        systemHistory.elements().map(\.diskReadBytesPerSec)
-    }
-
-    func diskWriteTrail() -> [Double] {
-        systemHistory.elements().map(\.diskWriteBytesPerSec)
-    }
-
     /// The recent total-throughput trail (bytes/sec, most recent last), for the
     /// network menubar sparkline. Sums download + upload from the system history.
     func networkTrail() -> [Double] {
         systemHistory.elements().map { $0.networkInBytesPerSec + $0.networkOutBytesPerSec }
-    }
-
-    /// Recent download / upload trails (bytes/sec, most recent last), for the
-    /// menubar up/down chart that shows both directions distinctly.
-    func networkInTrail() -> [Double] {
-        systemHistory.elements().map(\.networkInBytesPerSec)
-    }
-    func networkOutTrail() -> [Double] {
-        systemHistory.elements().map(\.networkOutBytesPerSec)
     }
 
     /// Refresh the requested menubar top-process lists (called on every scan).
@@ -2162,33 +2245,6 @@ final class SamplerModel: ObservableObject {
     func topByCPU(limit: Int = 10) -> [ProcessSample] {
         guard let latest else { return [] }
         return Ranking.topByCPU(latest.processes, limit: limit)
-    }
-
-    /// Timestamps for the trails below, so a hovered sample can be dated. All of
-    /// them are read off the same system history, so one list of times lines up
-    /// with any of them.
-    func systemTrailDates() -> [Date] {
-        systemHistory.elements().map(\.timestamp)
-    }
-
-    /// The recent total-CPU trail (0...100 percentages), for the menubar/dashboard
-    /// CPU sparkline. Derived from the in-memory system history, which now carries
-    /// the live total CPU on every tick.
-    func cpuLoadTrail() -> [Double] {
-        systemHistory.elements().map { $0.cpuLoad * 100 }
-    }
-
-    /// Recent battery-charge trail (0...100, most recent last), for the energy
-    /// menubar charge line. Plotted on a fixed 0...100 scale so the slope reads
-    /// as the charge-vs-drain rate.
-    func batteryChargeTrail() -> [Double] {
-        systemHistory.elements().map(\.batteryCharge)
-    }
-
-    /// Recent whole-machine power-draw trail (watts, most recent last), for the
-    /// energy menubar power bars shown on desktops (which have no charge line).
-    func systemPowerTrail() -> [Double] {
-        systemHistory.elements().map(\.batterySystemPowerWatts)
     }
 
     /// The recent per-process CPU trail (percent of one core, most recent last),

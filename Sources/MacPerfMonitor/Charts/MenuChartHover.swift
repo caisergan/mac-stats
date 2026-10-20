@@ -10,12 +10,20 @@ struct MenuChartSeries {
     let name: String
     let color: Color
     let values: [Double]
+    /// Bucket maxima parallel to `values`, on the longer ranges where each
+    /// value is a mean. The card quotes the peak beside the mean, since the
+    /// band it belongs to is what tells an overview chart from a smooth one.
+    let peaks: [Double]?
     let format: (Double) -> String
 
-    init(name: String, color: Color, values: [Double], format: @escaping (Double) -> String) {
+    init(
+        name: String, color: Color, values: [Double], peaks: [Double]? = nil,
+        format: @escaping (Double) -> String
+    ) {
         self.name = name
         self.color = color
         self.values = values
+        self.peaks = peaks
         self.format = format
     }
 }
@@ -77,7 +85,9 @@ struct MenuChartHoverOverlay: View {
     var body: some View {
         GeometryReader { geo in
             let plot = plotRect(geo.size)
+            // A slot in a gap has nothing to quote, so it shows no marker.
             let index = pointerX.flatMap { sampleIndex(atX: $0, plot: plot) }
+                .flatMap { hasReading(at: $0) ? $0 : nil }
             ZStack(alignment: .topLeading) {
                 Rectangle()
                     .fill(.clear)
@@ -114,7 +124,8 @@ struct MenuChartHoverOverlay: View {
             rule.move(to: CGPoint(x: markerX, y: plot.minY))
             rule.addLine(to: CGPoint(x: markerX, y: plot.maxY))
             ctx.stroke(rule, with: .color(.secondary.opacity(0.35)), lineWidth: 1)
-            for (offset, line) in series.enumerated() where index < line.values.count {
+            for (offset, line) in series.enumerated()
+            where index < line.values.count && line.values[index].isFinite {
                 let dotY = y(line.values[index], series: offset, plot: plot)
                 let radius: CGFloat = 2.5
                 ctx.fill(
@@ -131,10 +142,15 @@ struct MenuChartHoverOverlay: View {
     private func card(at index: Int) -> some View {
         ChartScrubCard(date: date(at: index)) {
             ForEach(Array(series.enumerated()), id: \.offset) { _, line in
-                if index < line.values.count {
+                if index < line.values.count, line.values[index].isFinite {
                     ChartScrubRow(
                         color: line.color, name: line.name,
                         value: line.format(line.values[index]))
+                    if let peaks = line.peaks, index < peaks.count {
+                        ChartScrubRow(
+                            color: line.color.opacity(0.45), name: t("%@ peak", line.name),
+                            value: line.format(peaks[index]))
+                    }
                 }
             }
         }
@@ -159,6 +175,10 @@ struct MenuChartHoverOverlay: View {
     // MARK: - Geometry
 
     private var sampleCount: Int { series.first?.values.count ?? 0 }
+
+    private func hasReading(at index: Int) -> Bool {
+        series.contains { index < $0.values.count && $0.values[index].isFinite }
+    }
 
     private func date(at index: Int) -> Date? {
         guard dates.count == sampleCount, dates.indices.contains(index) else { return nil }

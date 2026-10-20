@@ -6,6 +6,8 @@ import SwiftUI
 /// sparkline, the top ten processes by footprint, and the standard actions.
 struct MenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
     @EnvironmentObject private var updateController: UpdateController
     @EnvironmentObject private var menuClock: MenuClock
@@ -81,9 +83,7 @@ struct MenuBarContentView: View {
             )
 
             MenuTrendChart(
-                values: model.systemHistory.elements().map(\.pressurePercent),
-                dates: model.systemTrailDates(),
-                sampleCapacity: model.systemHistory.capacity, color: level.color,
+                series: model.menuTrend(.memoryPressure, range: chartRange), color: level.color,
                 domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
                 readoutName: t("Memory pressure"), readoutValue: { "\(Int($0.rounded()))%" }
             )

@@ -47,7 +47,7 @@ enum MenuChart {
     /// gradient runs from `gradientTop` (opaque end) to `gradientBottom` (faded).
     static func drawTrend(
         _ ctx: GraphicsContext, points: [CGPoint], baselineY: CGFloat,
-        color: Color, gradientTop: CGFloat, gradientBottom: CGFloat
+        color: Color, gradientTop: CGFloat, gradientBottom: CGFloat, filled: Bool = true
     ) {
         guard let first = points.first else { return }
         guard points.count >= 2 else {
@@ -56,6 +56,13 @@ enum MenuChart {
             tick.move(to: CGPoint(x: first.x - 2, y: first.y))
             tick.addLine(to: CGPoint(x: first.x + 2, y: first.y))
             ctx.stroke(tick, with: .color(color), lineWidth: lineWidth)
+            return
+        }
+
+        guard filled else {
+            ctx.stroke(
+                Path(MonotoneCurve.path(points)), with: .color(color),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
             return
         }
 
@@ -84,6 +91,84 @@ enum MenuChart {
     }
 }
 
+extension MenuChart {
+    /// Fill the band between a bucketed series' minima and maxima in a light
+    /// tint of its colour. The overview ranges draw each bucket's mean as the
+    /// line, and this band is where the samples the mean smooths over went:
+    /// a one second spike in an hour long chart still reaches the top.
+    /// Straight segments, not the monotone curve, since the edges are bucket
+    /// extremes rather than a signal to interpolate.
+    static func drawBand(
+        _ ctx: GraphicsContext, lower: [CGPoint], upper: [CGPoint], color: Color
+    ) {
+        guard lower.count == upper.count, let first = upper.first else { return }
+        var band = Path()
+        band.move(to: first)
+        for point in upper.dropFirst() { band.addLine(to: point) }
+        for point in lower.reversed() { band.addLine(to: point) }
+        band.closeSubpath()
+        ctx.fill(band, with: .color(color.opacity(0.2)))
+        if upper.count == 1 {
+            // A lone bucket has no width to fill; mark its range instead.
+            var tick = Path()
+            tick.move(to: first)
+            tick.addLine(to: lower[0])
+            ctx.stroke(tick, with: .color(color.opacity(0.35)), lineWidth: 3)
+        }
+    }
+
+    /// Draw one series, split into runs at its gaps (non-finite values, where
+    /// nothing was read): each run's band where the series has one, then its
+    /// line. A band replaces the soft area under the line, which would only
+    /// muddy it. `point` places a value at a slot.
+    static func drawSeries(
+        _ ctx: GraphicsContext, values: [Double], minima: [Double]?, maxima: [Double]?,
+        point: (Int, Double) -> CGPoint, baselineY: CGFloat, color: Color,
+        gradientTop: CGFloat, gradientBottom: CGFloat
+    ) {
+        let hasBand = minima?.count == values.count && maxima?.count == values.count
+        for run in runs(values) {
+            if hasBand, let minima, let maxima {
+                drawBand(
+                    ctx, lower: run.map { point($0, minima[$0]) },
+                    upper: run.map { point($0, maxima[$0]) }, color: color)
+            }
+            drawTrend(
+                ctx, points: run.map { point($0, values[$0]) }, baselineY: baselineY,
+                color: color, gradientTop: gradientTop, gradientBottom: gradientBottom,
+                filled: !hasBand)
+        }
+    }
+
+    /// The stretches of a series with a reading in every slot.
+    static func runs(_ values: [Double]) -> [Range<Int>] {
+        var runs: [Range<Int>] = []
+        var start: Int?
+        for (index, value) in values.enumerated() {
+            if value.isFinite {
+                if start == nil { start = index }
+            } else if let first = start {
+                runs.append(first..<index)
+                start = nil
+            }
+        }
+        if let first = start { runs.append(first..<values.count) }
+        return runs
+    }
+
+    /// Where slot `index` of `count` sits across `plot`, the placement every
+    /// header chart and its hover overlay share.
+    static func x(index: Int, count: Int, capacity: Int?, plot: CGRect) -> CGFloat {
+        if let capacity, capacity > 0 {
+            let fraction = LiveChartGeometry.normalizedSlot(
+                index: index, count: count, capacity: capacity)
+            return plot.minX + CGFloat(fraction) * plot.width
+        }
+        let step = count >= 2 ? plot.width / CGFloat(count - 1) : 0
+        return plot.minX + CGFloat(index) * step
+    }
+}
+
 /// A compact line + soft-area trend for the menu-bar dropdown headers, drawn on a
 /// fixed, labelled Y axis (gridlines + ticks in a left gutter) so a steady series
 /// reads as a clear flat line at its true level rather than a solid block.
@@ -91,6 +176,10 @@ enum MenuChart {
 /// domain; power passes a rounded auto-peak via `MenuChart.niceUpperBound`.
 struct MenuTrendChart: View {
     var values: [Double]
+    /// Bucket minima and maxima parallel to `values` on the overview ranges,
+    /// drawn as a band around the mean line. Nil on the raw detail range.
+    var minima: [Double]? = nil
+    var maxima: [Double]? = nil
     /// Timestamps parallel to `values`, so the hover read-out can date the
     /// sample it quotes. Empty leaves the time line off the card.
     var dates: [Date] = []
@@ -116,7 +205,7 @@ struct MenuTrendChart: View {
                 MenuChartHoverOverlay(
                     series: [
                         MenuChartSeries(
-                            name: readoutName, color: color, values: values,
+                            name: readoutName, color: color, values: values, peaks: maxima,
                             format: readoutValue)
                     ],
                     dates: dates, sampleCapacity: sampleCapacity, scale: .domain(domain))
@@ -148,22 +237,31 @@ struct MenuTrendChart: View {
             }
 
             guard !values.isEmpty else { return }
-            let points = values.enumerated().map { index, value in
-                let x: CGFloat
-                if let sampleCapacity, sampleCapacity > 0 {
-                    let fraction = LiveChartGeometry.normalizedSlot(
-                        index: index, count: values.count, capacity: sampleCapacity)
-                    x = plot.minX + CGFloat(fraction) * plot.width
-                } else {
-                    let step = values.count >= 2 ? plot.width / CGFloat(values.count - 1) : 0
-                    x = plot.minX + CGFloat(index) * step
-                }
-                return CGPoint(x: x, y: y(value))
-            }
-            MenuChart.drawTrend(
-                ctx, points: points, baselineY: plot.maxY, color: color,
-                gradientTop: plot.minY, gradientBottom: plot.maxY)
+            MenuChart.drawSeries(
+                ctx, values: values, minima: minima, maxima: maxima,
+                point: { index, value in
+                    CGPoint(
+                        x: MenuChart.x(
+                            index: index, count: values.count, capacity: sampleCapacity,
+                            plot: plot),
+                        y: y(value))
+                }, baselineY: plot.maxY, color: color, gradientTop: plot.minY,
+                gradientBottom: plot.maxY)
         }
         .accessibilityHidden(true)
+    }
+}
+
+extension MenuTrendChart {
+    /// A chart of one panel series, band and all.
+    init(
+        series: MenuTrendSeries, color: Color, domain: ClosedRange<Double>, ticks: [Double],
+        label: @escaping (Double) -> String, readoutName: String,
+        readoutValue: @escaping (Double) -> String
+    ) {
+        self.init(
+            values: series.values, minima: series.minima, maxima: series.maxima,
+            dates: series.dates, sampleCapacity: series.capacity, color: color, domain: domain,
+            ticks: ticks, label: label, readoutName: readoutName, readoutValue: readoutValue)
     }
 }
