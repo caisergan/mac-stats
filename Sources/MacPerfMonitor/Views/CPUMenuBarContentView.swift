@@ -21,6 +21,8 @@ struct CPUMenuBarContentView: View {
     /// Whether the top list shows one row per app (shared with the memory
     /// dropdown) and which apps are open.
     @AppStorage("menuProcessGroupByApp") private var groupByApp = true
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @State private var expandedApps: Set<String> = []
 
     var body: some View {
@@ -85,9 +87,7 @@ struct CPUMenuBarContentView: View {
             }
 
             MenuTrendChart(
-                values: model.cpuLoadTrail(), dates: model.systemTrailDates(),
-                sampleCapacity: model.systemHistory.capacity,
-                color: level.color,
+                series: model.menuTrend(.cpuLoad, range: chartRange), color: level.color,
                 domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
                 readoutName: t("CPU"), readoutValue: { "\(Int($0.rounded()))%" }
             )

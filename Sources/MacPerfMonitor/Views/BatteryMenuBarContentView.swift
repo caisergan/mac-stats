@@ -11,6 +11,8 @@ import SwiftUI
 /// affordances and action buttons.
 struct BatteryMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var updateController: UpdateController
@@ -109,8 +111,7 @@ struct BatteryMenuBarContentView: View {
     @ViewBuilder private func chargeChart(_ battery: BatterySample) -> some View {
         let level = BatteryLevel(percent: battery.chargePercent)
         MenuTrendChart(
-            values: model.batteryChargeTrail(), dates: model.systemTrailDates(),
-            sampleCapacity: model.systemHistory.capacity,
+            series: model.menuTrend(.batteryCharge, range: chartRange),
             color: battery.isCharging ? BatteryStyle.battery : level.color,
             domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
             readoutName: t("Charge"), readoutValue: { "\(Int($0.rounded()))%" }
@@ -123,13 +124,11 @@ struct BatteryMenuBarContentView: View {
     /// header, where the charge line has nothing to plot; hidden when the SMC
     /// exposes no telemetry.
     @ViewBuilder private var powerChart: some View {
-        let watts = model.systemPowerTrail()
-        if let peak = watts.max(), peak > 0 {
+        let watts = model.menuTrend(.systemPower, range: chartRange)
+        if let peak = watts.top, peak > 0 {
             let upper = MenuChart.niceUpperBound(peak)
             MenuTrendChart(
-                values: watts, dates: model.systemTrailDates(),
-                sampleCapacity: model.systemHistory.capacity,
-                color: BatteryStyle.consumer,
+                series: watts, color: BatteryStyle.consumer,
                 domain: 0...upper, ticks: [0, upper], label: { "\(Int($0.rounded())) W" },
                 readoutName: t("System power"), readoutValue: { BatteryFormat.watts($0) }
             )

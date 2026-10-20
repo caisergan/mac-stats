@@ -174,6 +174,7 @@ private struct MenuBarDockSettingsView: View {
     /// Shared with `PresenceController`. Off by default: the Dock icon comes and
     /// goes with the windows unless the user asks for it to stay.
     @AppStorage(PresenceController.pinDefaultsKey) private var pinDockIcon = false
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
 
     var body: some View {
         Form {
@@ -259,6 +260,16 @@ private struct MenuBarDockSettingsView: View {
                 Toggle("Show alarm marker", isOn: $menuBar.showsAlarmMarker)
                 caption(
                     "Put a red warning marker beside the read-outs while an alarm is active. Turning it off silences the marker only: the alarm still shows in the panel and still sends its notification."
+                )
+
+                Picker("Chart range", selection: $chartRange) {
+                    ForEach(MenuChartRange.allCases) { range in
+                        Text(range.label).tag(range)
+                    }
+                }
+                .pickerStyle(.segmented)
+                caption(
+                    "How much history the panel's charts show. One minute plots every sample; the longer ranges plot averages with a band out to the lowest and highest readings. The panel has the same control above its charts."
                 )
             } header: {
                 Text("Combined Item")

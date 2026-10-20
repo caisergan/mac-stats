@@ -45,7 +45,7 @@ struct CombinedMenuBarContentView: View {
         _ = menuClock.tick
         return VStack(alignment: .leading, spacing: 10) {
             metricSelector
-            alarmSummary
+            summaryRow
             Divider()
             metricContent
                 .id(selection.panel)
@@ -198,6 +198,24 @@ struct CombinedMenuBarContentView: View {
         metric == .pressure ? .ram : metric
     }
 
+    /// Whether the panel on show has a chart for the range to apply to. The
+    /// sensors list and the alerts have none.
+    private var showsChartRange: Bool {
+        guard let metric = selectedMetric else { return false }
+        return metric != .sensors
+    }
+
+    /// The alerts button, and beside it the chart range while a panel with a
+    /// chart is on show. Sharing the row costs the panel no extra height.
+    private var summaryRow: some View {
+        HStack(spacing: 8) {
+            alarmSummary
+            if showsChartRange {
+                MenuChartRangePicker()
+            }
+        }
+    }
+
     /// The metric panel on show, nil on the Alerts panel.
     private var selectedMetric: MenuBarMetric? {
         if case .metric(let metric) = selection.panel { return metric }
@@ -219,8 +237,11 @@ struct CombinedMenuBarContentView: View {
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
                 if !model.alertObservations.isEmpty {
+                    // The first thing to give way when the chart range shares
+                    // the row: it truncates, the counts beside it do not.
                     Text(t("Observations: %@", String(model.alertObservations.count)))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Text(model.activeAlerts.count, format: .number)
                     .monospacedDigit()

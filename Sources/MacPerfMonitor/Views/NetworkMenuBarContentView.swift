@@ -10,6 +10,8 @@ import SwiftUI
 /// row affordances and action buttons.
 struct NetworkMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var updateController: UpdateController
@@ -74,10 +76,13 @@ struct NetworkMenuBarContentView: View {
                         bytesPerSec: rates?.outBytesPerSec, tint: NetworkStyle.upload)
                 }
 
-                NetworkUpDownChart(
-                    download: model.networkInTrail(), upload: model.networkOutTrail(),
-                    sampleCapacity: model.systemHistory.capacity,
-                    dates: model.systemTrailDates()
+                MenuMirroredChart(
+                    up: .init(
+                        series: model.menuTrend(.networkIn, range: chartRange),
+                        name: t("Download"), color: NetworkStyle.download),
+                    down: .init(
+                        series: model.menuTrend(.networkOut, range: chartRange),
+                        name: t("Upload"), color: NetworkStyle.upload)
                 )
                 .frame(height: MenuChart.networkHeight)
 

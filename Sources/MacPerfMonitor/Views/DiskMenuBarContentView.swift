@@ -10,6 +10,8 @@ struct DiskMenuBarContentView: View {
     private static let processRowHeight: CGFloat = 22
 
     @EnvironmentObject private var model: SamplerModel
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
 
     var dismiss: () -> Void = {}
@@ -17,10 +19,13 @@ struct DiskMenuBarContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            DiskReadWriteChart(
-                read: model.diskReadTrail(), write: model.diskWriteTrail(),
-                sampleCapacity: model.systemHistory.capacity,
-                dates: model.systemTrailDates()
+            MenuMirroredChart(
+                up: .init(
+                    series: model.menuTrend(.diskRead, range: chartRange), name: t("Read"),
+                    color: DiskStyle.read),
+                down: .init(
+                    series: model.menuTrend(.diskWrite, range: chartRange), name: t("Write"),
+                    color: DiskStyle.write)
             )
             .frame(height: MenuChart.networkHeight)
             if let disk = model.latestDisk { activitySummary(disk) }
@@ -258,85 +263,5 @@ struct DiskMenuDeviceRow: View {
             t("%1$@: %2$@", t("Read"), t(key, String(read))),
             t("%1$@: %2$@", t("Write"), t(key, String(write))),
         ].joined(separator: "\n")
-    }
-}
-
-private struct DiskReadWriteChart: View {
-    let read: [Double]
-    let write: [Double]
-    var sampleCapacity: Int? = nil
-    /// Timestamps parallel to both trails, for the hover read-out's time line.
-    var dates: [Date] = []
-
-    /// The scale both directions share, stated here as well as in the drawing
-    /// so the hover marker lands on the trace rather than beside it.
-    private var upper: Double {
-        max(read.max() ?? 0, write.max() ?? 0, 1) * 1.2
-    }
-
-    var body: some View {
-        canvas
-            .overlay(
-                MenuChartHoverOverlay(
-                    series: [
-                        MenuChartSeries(
-                            name: t("Read"), color: DiskStyle.read, values: read,
-                            format: { ByteFormat.rate(max($0, 0)) }),
-                        MenuChartSeries(
-                            name: t("Write"), color: DiskStyle.write, values: write,
-                            format: { ByteFormat.rate(max($0, 0)) }),
-                    ],
-                    dates: dates, sampleCapacity: sampleCapacity,
-                    scale: .mirrored(upper: upper),
-                    plotRect: { MenuChart.plotRect(in: $0, reserveGutter: false) })
-            )
-    }
-
-    private var canvas: some View {
-        Canvas { context, size in
-            let plot = MenuChart.plotRect(in: size, reserveGutter: false)
-            let mid = plot.midY
-            let halfHeight = plot.height / 2
-            let peak = max(read.max() ?? 0, write.max() ?? 0, 1)
-            let upper = self.upper
-
-            var centre = Path()
-            centre.move(to: CGPoint(x: plot.minX, y: mid))
-            centre.addLine(to: CGPoint(x: plot.maxX, y: mid))
-            context.stroke(centre, with: .color(MenuChart.gridColor), lineWidth: 0.5)
-            context.draw(
-                Text(t("%@ peak", ByteFormat.rate(peak))).font(MenuChart.labelFont)
-                    .foregroundColor(MenuChart.labelColor),
-                at: CGPoint(x: plot.minX, y: plot.minY + 4), anchor: .topLeading)
-
-            func points(_ values: [Double], upward: Bool) -> [CGPoint] {
-                return values.enumerated().map { index, value in
-                    let height = CGFloat(min(1, max(0, value / upper))) * halfHeight
-                    let x: CGFloat
-                    if let sampleCapacity, sampleCapacity > 0 {
-                        let fraction = LiveChartGeometry.normalizedSlot(
-                            index: index, count: values.count, capacity: sampleCapacity)
-                        x = plot.minX + CGFloat(fraction) * plot.width
-                    } else {
-                        let step = values.count >= 2 ? plot.width / CGFloat(values.count - 1) : 0
-                        x = plot.minX + CGFloat(index) * step
-                    }
-                    return CGPoint(
-                        x: x,
-                        y: upward ? mid - height : mid + height)
-                }
-            }
-            if !read.isEmpty {
-                MenuChart.drawTrend(
-                    context, points: points(read, upward: true), baselineY: mid,
-                    color: DiskStyle.read, gradientTop: plot.minY, gradientBottom: mid)
-            }
-            if !write.isEmpty {
-                MenuChart.drawTrend(
-                    context, points: points(write, upward: false), baselineY: mid,
-                    color: DiskStyle.write, gradientTop: plot.maxY, gradientBottom: mid)
-            }
-        }
-        .accessibilityHidden(true)
     }
 }
