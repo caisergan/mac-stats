@@ -36,11 +36,15 @@ final class MenuListsModel: ObservableObject {
     /// Top processes by kernel-attributed read + write throughput.
     @Published private(set) var topDisk: [ProcessSample] = []
     @Published private(set) var topGPU: [ProcessSample] = []
-    /// The memory and CPU lists grouped by app (helpers under their app),
-    /// apps ranked by their total and members sorted highest first. Refreshed
-    /// alongside the flat lists so the popover's By App switch is instant.
+    /// Each list grouped by app (helpers under their app), apps ranked by their
+    /// total and members sorted highest first. Refreshed alongside the flat
+    /// lists so the panel's By App switch is instant.
     @Published private(set) var topFootprintApps: [AppProcessGroup] = []
     @Published private(set) var topCPUApps: [AppProcessGroup] = []
+    @Published private(set) var topEnergyApps: [AppProcessGroup] = []
+    @Published private(set) var topNetworkApps: [AppProcessGroup] = []
+    @Published private(set) var topDiskApps: [AppProcessGroup] = []
+    @Published private(set) var topGPUApps: [AppProcessGroup] = []
     /// Whether a scan has ranked the GPU list since it was last cleared. An
     /// empty list after a scan means nothing is drawing (every app that ever
     /// touched Metal keeps a context, so the list holds only active users),
@@ -63,12 +67,15 @@ final class MenuListsModel: ObservableObject {
         }
     }
 
-    /// Publish the by-app version of a list (memory and CPU only).
+    /// Publish the by-app version of a list.
     func updateApps(_ kind: MenuListKind, with groups: [AppProcessGroup]) {
         switch kind {
         case .footprint: if groups != topFootprintApps { topFootprintApps = groups }
         case .cpu: if groups != topCPUApps { topCPUApps = groups }
-        default: break
+        case .energy: if groups != topEnergyApps { topEnergyApps = groups }
+        case .network: if groups != topNetworkApps { topNetworkApps = groups }
+        case .disk: if groups != topDiskApps { topDiskApps = groups }
+        case .gpu: if groups != topGPUApps { topGPUApps = groups }
         }
     }
 

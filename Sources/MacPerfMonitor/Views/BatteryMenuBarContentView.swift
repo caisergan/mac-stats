@@ -2,104 +2,66 @@ import AppKit
 import MacPerfMonitorCore
 import SwiftUI
 
-/// The energy menubar dropdown (window style). On a laptop: a charge + power
-/// header, a one-line power-flow summary, the top energy-using apps, a health
-/// snippet, and actions. On a desktop (no battery): a bolt header, the top
-/// energy users, and actions. Tapping the header, the power summary, or the
-/// energy list opens the main window's Energy tab. The CPU/memory twins live in
-/// `CPUMenuBarContentView` / `MenuBarContentView`; the three share the row
-/// affordances and action buttons.
+/// The Energy tab of the menu bar panel. On a laptop: charge with its state and
+/// trend, the power draw, battery health, and the top energy users. On a desktop
+/// (no battery): the system's draw and trend, and the top energy users.
 struct BatteryMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
     /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
     @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var updateController: UpdateController
     @EnvironmentObject private var menuClock: MenuClock
 
-    /// Called after an action so the host (the AppKit popover) can dismiss.
-    var dismiss: () -> Void = {}
-    var embedded = false
-
     var body: some View {
-        // Re-render once a second while the popover is open (independently of the
-        // main window's refresh rate). Depend on the clock's tick and drive its
-        // open/close from this view's lifecycle — the status-item popover delegate
-        // callbacks do not fire reliably (which left the dropdowns at the global
-        // rate).
+        // Re-render once a second while the panel is open, independently of the
+        // main window's refresh rate.
         _ = menuClock.tick
-        return
-            panel
-            .onAppear { if !embedded { menuClock.open() } }
-            .onDisappear { if !embedded { menuClock.close() } }
-    }
-
-    private var panel: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: MenuPanelStyle.spacing) {
             if let battery = model.latestBattery, battery.isPresent {
-                header(battery)
-                chargeChart(battery)
-                Divider()
-                powerSummary(battery)
-                Divider()
-                topEnergy
-                Divider()
-                healthRow(battery)
-                if !embedded {
-                    Divider()
-                    actions
+                MenuPanelCard {
+                    header(battery)
+                    MenuChartHeader(title: "Charge")
+                    chargeChart(battery)
                 }
+                powerCard(battery)
+                topEnergy
             } else if model.liveSystem == nil {
-                Text("Reading energy\u{2026}")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
+                MenuPanelCard {
+                    Text("Reading energy\u{2026}")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 8)
+                }
             } else {
                 // Desktop: no battery, but the energy leaderboard still matters.
-                desktopHeader
-                powerChart
-                Divider()
-                topEnergy
-                if !embedded {
-                    Divider()
-                    actions
+                MenuPanelCard {
+                    desktopHeader
+                    powerChart
                 }
+                topEnergy
             }
-            if !embedded { MenuVersionFooter() }
         }
-        .padding(embedded ? 0 : 12)
-        .frame(width: embedded ? nil : 360)
     }
 
     /// The header for a Mac with no battery: the measured system power (or just a
-    /// bolt before the first reading), with an "on power adapter" note. Tapping it
-    /// opens the Energy tab.
+    /// bolt before the first reading), with an "on power adapter" note.
     private var desktopHeader: some View {
         let watts = model.latestBattery?.systemPowerWatts ?? 0
-        return Button(action: openBattery) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "bolt.fill")
-                    .foregroundStyle(BatteryStyle.consumer)
-                    .imageScale(.small)
-                if watts > 0 {
-                    Text(BatteryFormat.watts(watts))
-                        .font(.title2.weight(.semibold).monospacedDigit())
-                    Text("system power")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Energy").font(.headline)
-                }
-                Spacer()
-                Text("On power adapter")
-                    .font(.caption)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if watts > 0 {
+                MenuPanelFigure(text: BatteryFormat.watts(watts))
+                Text("system power")
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+            } else {
+                Text("Energy").font(.headline)
             }
+            Spacer(minLength: 4)
+            Text("On power adapter")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
-        .help("Open the Energy tab")
     }
 
     // MARK: - Trend charts
@@ -140,27 +102,16 @@ struct BatteryMenuBarContentView: View {
 
     private func header(_ battery: BatterySample) -> some View {
         let level = BatteryLevel(percent: battery.chargePercent)
-        return Button(action: openBattery) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: battery.isCharging ? "battery.100.bolt" : level.symbolName)
-                        .foregroundStyle(battery.isCharging ? BatteryStyle.battery : level.color)
-                        .imageScale(.small)
-                    Text(BatteryFormat.percent(battery.chargePercent))
-                        .font(.title2.weight(.semibold).monospacedDigit())
-                        .frame(minWidth: 58, alignment: .leading)
-                    Text(stateWord(battery))
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(battery.isCharging ? BatteryStyle.battery : level.color)
-                    Spacer()
-                    Text(timeRemaining(battery))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            MenuPanelFigure(text: BatteryFormat.percent(battery.chargePercent))
+            MenuStatusPill(
+                text: stateWord(battery),
+                color: battery.isCharging ? BatteryStyle.battery : level.color)
+            Spacer(minLength: 4)
+            Text(timeRemaining(battery))
+                .font(MenuPanelStyle.valueFont(size: 11.5))
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
-        .help("Open the Energy tab")
     }
 
     private func stateWord(_ battery: BatterySample) -> String {
@@ -181,22 +132,43 @@ struct BatteryMenuBarContentView: View {
         return ""
     }
 
-    // MARK: - Power summary
+    // MARK: - Power
 
-    private func powerSummary(_ battery: BatterySample) -> some View {
-        Button(action: openBattery) {
-            HStack(spacing: 8) {
+    private func powerCard(_ battery: BatterySample) -> some View {
+        MenuPanelCard {
+            HStack(spacing: 7) {
                 Image(systemName: "bolt.horizontal")
-                    .foregroundStyle(.secondary)
                     .imageScale(.small)
+                    .foregroundStyle(.secondary)
                 Text(powerLine(battery))
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-                Spacer()
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            let tiles = healthTiles(battery)
+            if !tiles.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(Array(tiles.enumerated()), id: \.offset) { _, tile in
+                        MenuStatTile(label: tile.label, value: tile.value)
+                    }
+                }
+                .padding(.top, 9)
             }
         }
-        .buttonStyle(.plain)
-        .help("Open the Energy tab")
+    }
+
+    private func healthTiles(_ battery: BatterySample) -> [(label: String, value: String)] {
+        var tiles: [(label: String, value: String)] = []
+        if let health = battery.healthPercent {
+            tiles.append((t("Health"), "\(Int(health.rounded()))%"))
+        }
+        if let cycles = battery.cycleCount {
+            tiles.append((t("Cycles"), String(cycles)))
+        }
+        if let temp = battery.temperatureCelsius {
+            tiles.append((t("Temperature"), BatteryFormat.celsius(temp)))
+        }
+        return tiles
     }
 
     private func powerLine(_ battery: BatterySample) -> String {
@@ -217,123 +189,13 @@ struct BatteryMenuBarContentView: View {
     // MARK: - Top energy
 
     private var topEnergy: some View {
-        let top = Array(menuLists.topEnergy.prefix(6))
-        let maxEnergy = max(top.first?.energyImpact ?? 1, 0.001)
-        return Button(action: openBattery) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Top energy users")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 2)
-                if top.isEmpty {
-                    Text("Sampling\u{2026}")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 6)
-                } else {
-                    ForEach(top) { process in
-                        energyRow(process, maxEnergy: maxEnergy)
-                    }
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .help("Open the Energy tab")
-    }
-
-    private func energyRow(_ process: ProcessSample, maxEnergy: Double) -> some View {
-        HStack(spacing: 8) {
-            Image(nsImage: ProcessIconProvider.shared.icon(forPath: process.executablePath))
-                .resizable()
-                .frame(width: 16, height: 16)
-            Text(process.displayName)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Capsule()
-                .fill(BatteryStyle.consumer.opacity(0.7))
-                .frame(width: max(3, 60 * process.energyImpact / maxEnergy), height: 5)
-                .frame(width: 60, alignment: .leading)
-            Text(String(format: "%.0f", process.energyImpact))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .trailing)
-        }
-        .padding(.vertical, 3)
-    }
-
-    // MARK: - Health
-
-    private func healthRow(_ battery: BatterySample) -> some View {
-        HStack(spacing: 10) {
-            if let health = battery.healthPercent {
-                Text(t("%@%% health", String(Int(health.rounded()))))
-                    .foregroundStyle(.secondary)
-            }
-            if let cycles = battery.cycleCount {
-                Text(t("%@ cycles", String(cycles)))
-                    .foregroundStyle(.secondary)
-            }
-            if let temp = battery.temperatureCelsius {
-                Text(BatteryFormat.celsius(temp))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .font(.caption.monospacedDigit())
-    }
-
-    // MARK: - Actions
-
-    private var actions: some View {
-        VStack(spacing: 2) {
-            MenuActionButton(title: "Open Energy", systemImage: "bolt.fill") {
-                openBattery()
-            }
-            MenuActionButton(title: "Settings…", systemImage: "gearshape") {
-                openSettings()
-            }
-            MenuActionButton(
-                title: "About \(AppInfo.displayName)", systemImage: "info.circle"
-            ) {
-                dismiss()
-                showStandardAboutPanel()
-            }
-            MenuActionButton(
-                title: "Check for Updates…", systemImage: "arrow.down.circle"
-            ) {
-                checkForUpdates()
-            }
-            .disabled(!updateController.canCheckForUpdates)
-            MenuActionButton(title: "Quit \(AppInfo.displayName)", systemImage: "power") {
-                NSApp.terminate(nil)
-            }
-        }
-    }
-
-    // MARK: - AppKit-hosted actions
-
-    /// Open the main window on the Battery tab: set the navigation signal the
-    /// main window observes, then surface the window. Posting through the same
-    /// notification the CPU panel uses keeps the open path in one place.
-    private func openBattery() {
-        dismiss()
-        appState.showBatteryTab = true
-        NotificationCenter.default.post(name: .macperfmonitorShowMainWindow, object: nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func openSettings() {
-        dismiss()
-        NSApp.activate(ignoringOtherApps: true)
-        NotificationCenter.default.post(name: .macperfmonitorShowSettings, object: nil)
-    }
-
-    /// Sparkle presents its own update window, so this needs no SwiftUI scene —
-    /// just dismiss the popover and bring the app forward so that window is key.
-    private func checkForUpdates() {
-        dismiss()
-        NSApp.activate(ignoringOtherApps: true)
-        updateController.checkForUpdates()
+        MenuRankedList(
+            title: "Top energy users",
+            metric: MenuRankedMetric(
+                parts: { [$0.energyImpact] }, colors: [MenuPanelStyle.accent(.energy)],
+                format: { String(format: "%.0f", $0) }, valueWidth: 36,
+                trail: { [model] in model.energyTrail(for: $0) }),
+            apps: Array(menuLists.topEnergyApps.prefix(6)),
+            processes: Array(menuLists.topEnergy.prefix(6)))
     }
 }

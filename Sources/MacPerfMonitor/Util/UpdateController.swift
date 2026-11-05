@@ -52,14 +52,16 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         subsystem: Bundle.main.bundleIdentifier ?? "uk.co.bzwrd.macperfmonitor",
         category: "update")
 
-    override init() {
+    /// `startingUpdater` is false only where no update check should run, such as
+    /// a test rendering a surface that reads this object.
+    init(startingUpdater: Bool = true) {
         super.init()
         // startingUpdater: true starts the updater immediately, which begins the
         // scheduled background checks declared in Info.plist. Self as updater
         // delegate so we get the pre-install hook; the standard user driver gives
         // the usual macOS update experience.
         controller = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+            startingUpdater: startingUpdater, updaterDelegate: self, userDriverDelegate: nil)
 
         // Mirror Sparkle's own readiness into a published property so SwiftUI menu
         // items can enable/disable correctly (KVO-observable on the updater).

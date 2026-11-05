@@ -12,7 +12,7 @@ enum MenuChart {
     /// The network chart is mirrored (download rises up / upload drops down from a
     /// centre line), so it gets roughly double the height — otherwise each direction
     /// only has ~22px and the trace is unreadable.
-    static let networkHeight: CGFloat = 104
+    static let networkHeight: CGFloat = 72
     /// Width reserved at the left for the axis tick labels.
     static let gutter: CGFloat = 30
     static let lineWidth: CGFloat = 1.5

@@ -41,31 +41,11 @@ final class NetworkMenuLayoutTests: XCTestCase {
         XCTAssertEqual(NetworkMenuSummary.rateText(0), ByteFormat.rate(0))
     }
 
-    func testAppListReservesSixRowsWhileActivityChanges() async {
-        _ = NSApplication.shared
-        for width in [336.0, 380] {
-            let host = NSHostingView(
-                rootView: NetworkMenuAppList(processes: []).frame(width: width))
-            let window = NSWindow(
-                contentRect: CGRect(x: 100, y: 100, width: width, height: 200),
-                styleMask: .borderless, backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = host
-            defer { window.close() }
-            for samples in appStates {
-                host.rootView = NetworkMenuAppList(processes: samples).frame(width: width)
-                host.layoutSubtreeIfNeeded()
-                XCTAssertEqual(host.fittingSize.width, width, accuracy: 0.5)
-                XCTAssertEqual(host.fittingSize.height, NetworkMenuAppList.height, accuracy: 0.5)
-            }
-        }
-    }
-
     func testNetworkSectionKeepsFollowingContentInPlace() async throws {
         _ = NSApplication.shared
         for width in [336.0, 380] {
             for appearance in [NSAppearance.Name.aqua, .darkAqua] {
-                let host = NSHostingView(rootView: section(states[0], processes: [], width: width))
+                let host = NSHostingView(rootView: section(states[0], width: width))
                 let window = NSWindow(
                     contentRect: CGRect(x: 100, y: 100, width: width + 24, height: 400),
                     styleMask: .borderless, backing: .buffered, defer: false)
@@ -76,8 +56,7 @@ final class NetworkMenuLayoutTests: XCTestCase {
                 host.layoutSubtreeIfNeeded()
                 let initialSize = host.fittingSize
                 for (index, state) in states.enumerated() {
-                    let samples = appStates[index % appStates.count]
-                    host.rootView = section(state, processes: samples, width: width)
+                    host.rootView = section(state, width: width)
                     host.layoutSubtreeIfNeeded()
                     XCTAssertEqual(host.fittingSize.width, initialSize.width, accuracy: 0.5)
                     XCTAssertEqual(host.fittingSize.height, initialSize.height, accuracy: 0.5)
@@ -90,41 +69,14 @@ final class NetworkMenuLayoutTests: XCTestCase {
         }
     }
 
-    private func section(
-        _ summary: NetworkMenuSummary, processes: [ProcessSample], width: CGFloat
-    ) -> some View {
+    private func section(_ summary: NetworkMenuSummary, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             summary
-            Divider()
-            NetworkMenuAppList(processes: processes)
-            Divider()
             Text("Open Network").font(.caption)
         }
         .frame(width: width)
         .padding(12)
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var appStates: [[ProcessSample]] {
-        let samples = (0..<8).map(process)
-        var invalid = samples[0]
-        invalid.networkBytesPerSec = .nan
-        return [[], [samples[0]], Array(samples.prefix(6)), samples, [invalid], []]
-    }
-
-    private func process(_ index: Int) -> ProcessSample {
-        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
-        return ProcessSample(
-            timestamp: timestamp, pid: Int32(1000 + index), ppid: 1,
-            name: index == 0
-                ? "Network client with a long application name" : "Network client \(index + 1)",
-            physFootprint: 0, residentSize: 0, virtualSize: 0, lifetimeMaxFootprint: 0,
-            cpuPercent: 0, cpuTimeUser: 0, cpuTimeSystem: 0, threadCount: 1,
-            fdTotal: 0, fdVnode: 0, fdSocket: 0, fdPipe: 0, fdOther: 0,
-            diskBytesRead: 0, diskBytesWritten: 0,
-            networkBytesPerSec: pow(1024, Double(index % 4)) * Double(index + 1),
-            isTranslated: false, architecture: .arm64, startTime: timestamp, uid: 501,
-            dataSource: .directUserRead, footprintReadable: true)
     }
 
     private func capture(_ view: NSView, name: String) throws {

@@ -52,12 +52,15 @@ struct ANEMenuHistory {
 
     var timeChart: TrendModel {
         chart(
-            points: time, name: t("ANE time"), unit: .millisecondsPerSecond, color: .purple,
+            points: time, name: t("ANE time"), unit: .millisecondsPerSecond,
+            color: MenuPanelStyle.accent(.gpu),
             minimumTop: 1000)
     }
 
     var powerChart: TrendModel {
-        chart(points: power, name: t("ANE power"), unit: .watts, color: .pink, minimumTop: 1)
+        chart(
+            points: power, name: t("ANE power"), unit: .watts, color: MenuPanelStyle.accent(.gpu),
+            minimumTop: 1)
     }
 
     private func chart(
@@ -78,7 +81,7 @@ struct ANEMenuHistory {
         model.yTicks = [0, top / 2, top]
         model.yFormat = unit.format
         model.detailFormat = unit.format
-        model.leftGutter = 68
+        model.leftGutter = 58
         model.statisticsInterval = bucket ?? 1
         model.gapThreshold = (bucket ?? 1) * 3
         model.accessibilityLabel = name
@@ -91,39 +94,44 @@ struct ANEMenuCharts: View {
     let gpu: GPUSample
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Side by side: the two share an engine and a time axis, and a stack
+        // would make this the tallest card on the tab.
+        HStack(alignment: .top, spacing: 14) {
             metric(
                 "ANE time", value: ANEActivityPresentation.value(gpu) ?? t("Unavailable"),
                 status: history.hasPartialTime
                     ? t("Partial coverage") : ANEActivityPresentation.status(gpu),
-                chart: history.timeChart, color: .purple
+                chart: history.timeChart
             )
             .help(
                 "Accounted ANE time per second, not percent of compute capacity. Partial readings are lower bounds. Missing readings are gaps."
             )
             metric(
                 "ANE power", value: ANEPowerPresentation.value(gpu) ?? t("Unavailable"),
-                status: ANEPowerPresentation.status(gpu), chart: history.powerChart, color: .pink
+                status: ANEPowerPresentation.status(gpu), chart: history.powerChart
             )
             .help("ANE power requires elevated coverage. ANE Time works without it.")
         }
     }
 
     private func metric(
-        _ title: LocalizedStringKey, value: String, status: String, chart: TrendModel, color: Color
+        _ title: LocalizedStringKey, value: String, status: String, chart: TrendModel
     ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).foregroundStyle(color)
-                Spacer(minLength: 8)
-                Text(value).monospacedDigit().multilineTextAlignment(.trailing)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .fixedSize()
+                Spacer(minLength: 2)
+                Text(value)
+                    .font(MenuPanelStyle.valueFont(size: 11))
+                    .multilineTextAlignment(.trailing)
             }
-            .font(.caption)
-            .frame(height: 17)
+            .frame(height: 16)
             .lineLimit(1)
-            .minimumScaleFactor(0.8)
+            .minimumScaleFactor(0.7)
             TrendSnapshotChart(model: chart)
-                .frame(height: 62)
+                .frame(height: 44)
                 .overlay {
                     if !chart.series.contains(where: {
                         $0.column.values.contains(where: \.isFinite)
@@ -133,22 +141,21 @@ struct ANEMenuCharts: View {
                     }
                 }
             Text(status)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(height: 14)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// The GPU menubar dropdown. Headline utilization and a usage-history sparkline,
-/// device / renderer / tiler / Neural-Engine activity bars, a details block
-/// with GPU + ANE + CPU power (IOReport), in-use / allocated memory, die
-/// temperature and fan (SMC), and the top GPU processes with the AI runtime
-/// named where there is one. Apple-silicon only. Re-renders at the dial rate
-/// while open via the shared `MenuClock`; the process list rides the popover
-/// scan cadence its status item registers for.
+/// The GPU tab of the menu bar panel: utilization with its verdict and trend,
+/// device / renderer / tiler activity, the Neural Engine, power and memory, and
+/// the top consumers with the AI runtime named where there is one. Apple-silicon
+/// only. Re-renders at the dial rate while open via the shared `MenuClock`; the
+/// process list rides the popover scan cadence its status item registers for.
 struct GPUMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
     /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
@@ -156,80 +163,68 @@ struct GPUMenuBarContentView: View {
     @EnvironmentObject private var menuLists: MenuListsModel
     @EnvironmentObject private var menuClock: MenuClock
 
-    /// Called after an action so the host (the AppKit popover) can dismiss.
-    var dismiss: () -> Void = {}
-    var embedded = false
-
     var body: some View {
         _ = menuClock.tick
-        return
-            panel
-            .onAppear { if !embedded { menuClock.open() } }
-            .onDisappear { if !embedded { menuClock.close() } }
-    }
-
-    private var panel: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: MenuPanelStyle.spacing) {
             if let gpu = model.latestGPU {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        header(gpu)
-                        sparkline
-                        Divider()
-                        bars(gpu)
-                        Divider()
-                        ANEMenuCharts(history: aneHistory, gpu: gpu)
-                        Divider()
-                        details(gpu)
-                        Divider()
-                        topProcesses
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, 18)
+                summaryCard(gpu)
+                MenuPanelCard {
+                    MenuPanelHeading(title: "Activity")
+                        .padding(.bottom, 7)
+                    bars(gpu)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(
-                    height: Self.contentHeight(
-                        screenHeight: NSScreen.main?.visibleFrame.height ?? 900, embedded: embedded)
-                )
+                MenuPanelCard {
+                    MenuPanelHeading(title: "Neural Engine")
+                        .padding(.bottom, 7)
+                    ANEMenuCharts(history: aneHistory, gpu: gpu)
+                }
+                MenuPanelCard { MenuDetailGrid(rows: details(gpu)) }
+                MenuRankedList(
+                    title: "Top GPU", metric: metric, apps: menuLists.topGPUApps,
+                    processes: Array(menuLists.topGPU),
+                    emptyText: menuLists.gpuListScanned
+                        ? t("Nothing is using the GPU") : t("Sampling\u{2026}"))
             } else {
-                Text("Reading GPU\u{2026}")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 8)
-            }
-            if !embedded { MenuVersionFooter() }
-        }
-        .padding(embedded ? 0 : 12)
-        .frame(width: embedded ? nil : 300)
-    }
-
-    static func contentHeight(screenHeight: CGFloat, embedded: Bool) -> CGFloat {
-        min(600, max(200, screenHeight - (embedded ? 210 : 70)))
-    }
-
-    // MARK: - Header + sparkline
-
-    private func header(_ gpu: GPUSample) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("GPU").font(.caption).foregroundStyle(.secondary)
-                Text(gpu.name ?? t("Graphics")).font(.headline).lineLimit(1)
-                if let cores = gpu.coreCount {
-                    Text(t("%@-core", String(cores))).font(.caption2).foregroundStyle(.secondary)
+                MenuPanelCard {
+                    Text("Reading GPU\u{2026}")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 8)
                 }
             }
-            Spacer()
-            Text("\(Int(gpu.utilization.rounded()))%")
-                .font(.system(.title, design: .rounded).weight(.semibold))
-                .foregroundStyle(CPULevel(fraction: gpu.utilization / 100).color)
-                .monospacedDigit()
         }
     }
 
-    private var sparkline: some View {
-        MenuSparklineChart(
-            series: model.menuTrend(.gpuUtilization, range: chartRange), color: .accentColor,
-            domain: 0...100, name: t("GPU"), format: { "\(Int($0.rounded()))%" })
+    // MARK: - Summary
+
+    private func summaryCard(_ gpu: GPUSample) -> some View {
+        let level = CPULevel(fraction: gpu.utilization / 100)
+        return MenuPanelCard {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                MenuPanelFigure(text: "\(Int(gpu.utilization.rounded()))%")
+                MenuStatusPill(text: level.label, color: level.color)
+                Spacer(minLength: 4)
+                Text(deviceName(gpu))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            MenuChartHeader(title: "GPU")
+            MenuTrendChart(
+                series: model.menuTrend(.gpuUtilization, range: chartRange),
+                color: level == .light ? MenuPanelStyle.accent(.gpu) : level.color,
+                domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
+                readoutName: t("GPU"), readoutValue: { "\(Int($0.rounded()))%" }
+            )
+            .frame(height: MenuChart.height)
+        }
+    }
+
+    private func deviceName(_ gpu: GPUSample) -> String {
+        let name = gpu.name ?? t("Graphics")
+        guard let cores = gpu.coreCount else { return name }
+        return "\(name) · \(t("%@-core", String(cores)))"
     }
 
     private var aneHistory: ANEMenuHistory {
@@ -245,89 +240,51 @@ struct GPUMenuBarContentView: View {
     // MARK: - Activity bars
 
     private func bars(_ gpu: GPUSample) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             bar("Device", gpu.utilization)
             if let render = gpu.renderUtilization { bar("Renderer", render) }
             if let tiler = gpu.tilerUtilization { bar("Tiler", tiler) }
         }
     }
 
-    private func bar(
-        _ label: LocalizedStringKey, _ percent: Double, trailing: String? = nil
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if let trailing { Text(trailing).font(.caption2).foregroundStyle(.tertiary) }
-                Text("\(Int(percent.rounded()))%").font(.caption.monospacedDigit())
-            }
-            ProgressView(value: min(max(percent / 100, 0), 1))
-                .tint(CPULevel(fraction: percent / 100).color)
+    private func bar(_ label: LocalizedStringKey, _ percent: Double) -> some View {
+        let color =
+            CPULevel(fraction: percent / 100) == .light
+            ? MenuPanelStyle.accent(.gpu) : CPULevel(fraction: percent / 100).color
+        return HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .leading)
+                .lineLimit(1)
+            MenuMeter(parts: [(fraction: percent / 100, color: color)], height: 5)
+            Text(verbatim: "\(Int(percent.rounded()))%")
+                .font(MenuPanelStyle.valueFont(size: 11.5))
+                .frame(width: 34, alignment: .trailing)
         }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Details
 
-    private func details(_ gpu: GPUSample) -> some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 5) {
-            if let watts = gpu.gpuPowerWatts {
-                detail("GPU power", wattsString(watts) ?? "—")
-            }
-            if let watts = gpu.cpuPowerWatts {
-                detail("CPU power", wattsString(watts) ?? "—")
-            }
-            if gpu.inUseMemoryBytes != nil || gpu.allocatedMemoryBytes != nil {
-                detail("Memory", memoryString(gpu))
-            }
-            if let temp = gpu.dieTemperatureC {
-                detail("Die temperature", TemperatureFormat.string(temp))
-            }
-            if let rpm = gpu.fanRPM {
-                detail("Fan", rpm == 0 ? "Off" : "\(rpm) rpm")
-            }
+    private func details(_ gpu: GPUSample) -> [(label: String, value: String)] {
+        var rows: [(label: String, value: String)] = []
+        if let watts = gpu.gpuPowerWatts {
+            rows.append((t("GPU power"), String(format: "%.2f W", watts)))
         }
-    }
-
-    private func detail(_ label: LocalizedStringKey, _ value: String) -> some View {
-        GridRow {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-                .gridColumnAlignment(.leading)
-            Text(value).font(.caption.monospacedDigit())
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        if let watts = gpu.cpuPowerWatts {
+            rows.append((t("CPU power"), String(format: "%.2f W", watts)))
         }
-    }
-
-    // MARK: - Top processes
-
-    private var topProcesses: some View {
-        let top = Array(menuLists.topGPU.prefix(8))
-        return VStack(alignment: .leading, spacing: 0) {
-            Text("Top GPU")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
-
-            if top.isEmpty {
-                Text(
-                    menuLists.gpuListScanned ? t("Nothing is using the GPU") : t("Sampling\u{2026}")
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 8)
-            } else {
-                ForEach(top) { process in
-                    GPUMenuProcessRow(
-                        process: process,
-                        workload: model.gpuWorkload(for: process.id))
-                }
-            }
+        if let temp = gpu.dieTemperatureC {
+            rows.append((t("Die temperature"), TemperatureFormat.string(temp)))
         }
-    }
-
-    private func wattsString(_ watts: Double?) -> String? {
-        guard let watts else { return nil }
-        return String(format: "%.2f W", watts)
+        if let rpm = gpu.fanRPM {
+            rows.append((t("Fan"), rpm == 0 ? t("Off") : t("%@ rpm", String(rpm))))
+        }
+        if gpu.inUseMemoryBytes != nil || gpu.allocatedMemoryBytes != nil {
+            rows.append((t("Memory"), memoryString(gpu)))
+        }
+        return rows
     }
 
     private func memoryString(_ gpu: GPUSample) -> String {
@@ -344,63 +301,13 @@ struct GPUMenuBarContentView: View {
         default: return "—"
         }
     }
-}
 
-/// One row of the GPU dropdown's top list: icon, name, the AI runtime when the
-/// process is one (the reason to watch the GPU at all), and its share of the
-/// device over the last scan interval.
-struct GPUMenuProcessRow: View {
-    let process: ProcessSample
-    let workload: GPUWorkloadInfo?
-    @State private var hovering = false
+    // MARK: - Top consumers
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(nsImage: ProcessIconProvider.shared.icon(forPath: process.executablePath))
-                .resizable()
-                .frame(width: 16, height: 16)
-            HStack(spacing: 5) {
-                Text(process.displayName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let runtime = workload?.runtime {
-                    Text(runtime)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Color.secondary.opacity(0.15)))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Text(CPUFormat.percent(process.gpuPercentValue))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .trailing)
-            ProcessRowMenuButton(identity: process.id, bringWindowForward: true)
-        }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(hovering ? Color.accentColor.opacity(0.14) : .clear)
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens this process in the main window")
-        .processRowActions(identity: process.id, bringWindowForward: true, openOnSingleTap: true)
-    }
-
-    private var accessibilityLabel: String {
-        let base = "\(process.displayName), \(CPUFormat.percent(process.gpuPercentValue)) GPU"
-        guard let runtime = workload?.runtime else { return base }
-        return "\(base), \(runtime)"
+    private var metric: MenuRankedMetric {
+        MenuRankedMetric(
+            parts: { [$0.gpuPercentValue] }, colors: [MenuPanelStyle.accent(.gpu)],
+            format: CPUFormat.percent, trail: { [model] in model.gpuTrail(for: $0) },
+            badge: { [model] in model.gpuWorkload(for: $0.id)?.runtime })
     }
 }

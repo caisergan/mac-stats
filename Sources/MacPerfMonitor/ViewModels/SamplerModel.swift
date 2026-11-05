@@ -1661,10 +1661,14 @@ final class SamplerModel: ObservableObject {
     /// the main thread exactly as a table-due scan would, so the Processes tab
     /// can be driven headless at a known cadence. Never called by the app.
     func publishForBenchmark(
-        _ snapshot: Sampler.Snapshot, table: Bool = true, gpu: GPUSample? = nil
+        _ snapshot: Sampler.Snapshot, table: Bool = true, gpu: GPUSample? = nil,
+        network: NetworkSample? = nil, disk: DiskSample? = nil, battery: BatterySample? = nil
     ) {
         systemHistory.append(snapshot.system)
         appendRecentCPU(snapshot.cpu)
+        appendRecentNetwork(network)
+        appendRecentDisk(disk)
+        if let battery { recentBattery = battery }
         if let gpu {
             recentGPUSamples.append(gpu)
             if recentGPUSamples.count > cpuSmoothingTicks {
@@ -1883,6 +1887,8 @@ final class SamplerModel: ObservableObject {
                 .energy,
                 with: Array(
                     processes.sorted { $0.energyImpact > $1.energyImpact }.prefix(menuListLimit)))
+            menuLists.updateApps(
+                .energy, with: Self.topApps(processes, limit: menuListLimit) { $0.energyImpact })
         }
         if kinds.contains(.network) {
             // Per-app network: only when the opt-in reader is feeding data. Skip
@@ -1896,6 +1902,10 @@ final class SamplerModel: ObservableObject {
                         processes.sorted { $0.networkBytesPerSec > $1.networkBytesPerSec }
                             .prefix(menuListLimit))
                     : [])
+            menuLists.updateApps(
+                .network,
+                with: netActive
+                    ? Self.topApps(processes, limit: menuListLimit) { $0.networkBytesPerSec } : [])
         }
         if kinds.contains(.disk) {
             menuLists.update(
@@ -1907,6 +1917,11 @@ final class SamplerModel: ObservableObject {
                         if lhsRate != rhsRate { return lhsRate > rhsRate }
                         return $0.pid < $1.pid
                     }.prefix(menuListLimit)))
+            menuLists.updateApps(
+                .disk,
+                with: Self.topApps(processes, limit: menuListLimit) {
+                    $0.diskReadBytesPerSec + $0.diskWriteBytesPerSec
+                })
         }
         if kinds.contains(.gpu) {
             // Rank by the share of the GPU each process used over the last scan
@@ -1925,6 +1940,10 @@ final class SamplerModel: ObservableObject {
             // rows classified even when no table is publishing.
             addGPUWorkloads(top)
             menuLists.update(.gpu, with: top)
+            let apps = Self.topApps(active, limit: menuListLimit) { $0.gpuPercentValue }
+            // An open app lists members the flat list may have cut off.
+            addGPUWorkloads(apps.flatMap(\.processes))
+            menuLists.updateApps(.gpu, with: apps)
         }
     }
 
@@ -2163,7 +2182,9 @@ final class SamplerModel: ObservableObject {
                     fdTotal: Int(process.fdTotal),
                     diskRead: process.diskBytesRead,
                     diskWritten: process.diskBytesWritten,
-                    networkBytesPerSec: process.networkBytesPerSec
+                    networkBytesPerSec: process.networkBytesPerSec,
+                    gpuPercent: process.gpuPercentValue,
+                    energyImpact: process.energyImpact
                 ))
             if let count = processTrails[process.id]?.count, count > Self.processTrailCapacity {
                 processTrails[process.id]?.removeFirst(count - Self.processTrailCapacity)
@@ -2251,6 +2272,31 @@ final class SamplerModel: ObservableObject {
     /// for the menubar CPU list sparklines.
     func cpuTrail(for identity: ProcessIdentity) -> [Double] {
         (processTrails[identity] ?? []).map(\.cpuPercent)
+    }
+
+    /// The recent per-process GPU share, for the panel's GPU list.
+    func gpuTrail(for identity: ProcessIdentity) -> [Double] {
+        (processTrails[identity] ?? []).map(\.gpuPercent)
+    }
+
+    /// The recent per-process energy impact, for the panel's Energy list.
+    func energyTrail(for identity: ProcessIdentity) -> [Double] {
+        (processTrails[identity] ?? []).map(\.energyImpact)
+    }
+
+    /// The recent per-process network throughput, for the panel's Network list.
+    func networkTrail(for identity: ProcessIdentity) -> [Double] {
+        (processTrails[identity] ?? []).map(\.networkBytesPerSec)
+    }
+
+    /// The recent per-process disk throughput, reads and writes together, for
+    /// the panel's Disk list. The trail keeps cumulative counters, so the rate
+    /// is worked out here, on the one row being hovered.
+    func diskTrail(for identity: ProcessIdentity) -> [Double] {
+        let trail = processTrails[identity] ?? []
+        return MenuTrail.rates(
+            counters: trail.map { Double($0.diskRead) + Double($0.diskWritten) },
+            dates: trail.map(\.date))
     }
 
     /// MacPerfMonitor's own footprint and CPU, read from the latest snapshot by pid —

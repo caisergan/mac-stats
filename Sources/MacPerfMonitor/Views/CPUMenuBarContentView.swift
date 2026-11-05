@@ -1,101 +1,68 @@
-import AppKit
 import MacPerfMonitorCore
 import SwiftUI
 
-/// The CPU menubar dropdown (window style): a total-CPU summary with a live
-/// sparkline and load averages, the per-core grid (badged P/E on Apple Silicon),
-/// and the top processes by CPU. The memory/pressure twin lives in
-/// `MenuBarContentView`; the two share the row affordances and action buttons.
+/// The CPU tab of the menu bar panel: total CPU with its verdict and trend, the
+/// per-core grid (badged P/E on Apple Silicon), and the top consumers.
 struct CPUMenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
     @EnvironmentObject private var menuLists: MenuListsModel
-    @EnvironmentObject private var updateController: UpdateController
     @EnvironmentObject private var menuClock: MenuClock
-
-    /// Called after an action so the host (the AppKit popover) can dismiss.
-    var dismiss: () -> Void = {}
-    var embedded = false
+    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
+    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
 
     private let topology = CPUTopology.current
 
-    /// Whether the top list shows one row per app (shared with the memory
-    /// dropdown) and which apps are open.
-    @AppStorage("menuProcessGroupByApp") private var groupByApp = true
-    /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
-    @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
-    @State private var expandedApps: Set<String> = []
-
     var body: some View {
-        // Re-render once a second while the popover is open, so the live CPU %,
-        // load averages, sparkline, and core grid tick at 1 Hz (independently of
-        // the main window's refresh rate). Depend on the clock's tick explicitly,
-        // and drive its open/close from THIS view's lifecycle — the status-item
-        // popover's own `popoverDidShow`/`DidClose` delegate callbacks do not fire
-        // reliably, which is why the dropdowns were stuck at the global rate.
+        // Re-render once a second while the panel is open, so the live CPU %,
+        // sparkline and core grid tick at 1 Hz independently of the main
+        // window's refresh rate.
         _ = menuClock.tick
-        return
-            panel
-            .onAppear { if !embedded { menuClock.open() } }
-            .onDisappear { if !embedded { menuClock.close() } }
-    }
-
-    private var panel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            Divider()
-            coreSection
-            Divider()
-            topProcesses
-            if !embedded {
-                Divider()
-                actions
-                MenuVersionFooter()
-            }
+        return VStack(alignment: .leading, spacing: MenuPanelStyle.spacing) {
+            summaryCard
+            coresCard
+            MenuRankedList(
+                title: "Top CPU", metric: metric, apps: menuLists.topCPUApps,
+                processes: menuLists.topCPU)
         }
-        .padding(embedded ? 0 : 12)
-        .frame(width: embedded ? nil : 380)
     }
 
-    // MARK: - Header
+    // MARK: - Summary
 
-    private var header: some View {
+    private var summaryCard: some View {
         let cpu = model.smoothedCPU
         let usage = cpu?.totalUsage ?? 0
         let level = CPULevel(fraction: usage)
-        return VStack(alignment: .leading, spacing: 6) {
+        return MenuPanelCard {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: level.symbolName)
-                    .foregroundStyle(level.color)
-                    .imageScale(.small)
-                Text(cpu == nil ? "—" : "\(Int((usage * 100).rounded()))%")
-                    .font(.title2.weight(.semibold).monospacedDigit())
-                    // Reserve room for the widest value ("100%") so the level
-                    // label beside it does not shift as the digit count changes.
-                    .frame(minWidth: 58, alignment: .leading)
-                Text(level.label)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(level.color)
-                Spacer()
-                if let cpu {
-                    Text(
-                        "load \(loadString(cpu.loadAverage1)) · \(loadString(cpu.loadAverage5)) · \(loadString(cpu.loadAverage15))"
-                    )
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .help("1, 5 and 15-minute load averages (run-queue length).")
-                }
+                MenuPanelFigure(text: cpu == nil ? "--" : "\(Int((usage * 100).rounded()))%")
+                MenuStatusPill(text: level.label, color: level.color)
+                Spacer(minLength: 0)
             }
-
+            MenuChartHeader(title: "CPU")
             MenuTrendChart(
-                series: model.menuTrend(.cpuLoad, range: chartRange), color: level.color,
+                series: model.menuTrend(.cpuLoad, range: chartRange),
+                color: level == .light ? MenuPanelStyle.accent(.cpu) : level.color,
                 domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
                 readoutName: t("CPU"), readoutValue: { "\(Int($0.rounded()))%" }
             )
             .frame(height: MenuChart.height)
+        }
+    }
 
-            Text(coreSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    // MARK: - Cores
+
+    private var coresCard: some View {
+        MenuPanelCard {
+            HStack(spacing: 8) {
+                MenuPanelHeading(title: "Cores")
+                Spacer(minLength: 0)
+                Text(coreSummary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.bottom, 7)
+            CoreGridView(cores: model.smoothedCPU?.cores ?? [], barHeight: 28)
         }
     }
 
@@ -110,148 +77,12 @@ struct CPUMenuBarContentView: View {
         return "\(topology.brand) · \(total) core\(total == 1 ? "" : "s")"
     }
 
-    private func loadString(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
+    // MARK: - Top consumers
 
-    // MARK: - Core grid
-
-    private var coreSection: some View {
-        CoreGridView(cores: model.smoothedCPU?.cores ?? [], barHeight: 38)
-    }
-
-    // MARK: - Top processes
-
-    private var topProcesses: some View {
-        let top = Array(menuLists.topCPU.prefix(8))
-        let apps = Array(menuLists.topCPUApps.prefix(8))
-        return VStack(alignment: .leading, spacing: 0) {
-            MenuProcessListHeader(title: "Top CPU", groupByApp: $groupByApp)
-
-            if groupByApp ? apps.isEmpty : top.isEmpty {
-                Text("Sampling…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 8)
-            } else if groupByApp {
-                ForEach(apps) { app in
-                    MenuAppGroupRow(
-                        group: app,
-                        value: CPUFormat.percent(app.cpuPercent),
-                        valueWidth: 52,
-                        trail: MenuTrail.sum(app.processes.map { model.cpuTrail(for: $0.id) }),
-                        isExpanded: expandedApps.contains(app.id),
-                        toggle: { expandedApps.formSymmetricDifference([app.id]) }
-                    ) { process in
-                        CPUMenuProcessRow(process: process, trail: model.cpuTrail(for: process.id))
-                    }
-                }
-            } else {
-                ForEach(top) { process in
-                    CPUMenuProcessRow(
-                        process: process,
-                        trail: model.cpuTrail(for: process.id))
-                }
-            }
-        }
-    }
-
-    // MARK: - Actions
-
-    private var actions: some View {
-        VStack(spacing: 2) {
-            MenuActionButton(title: "Open \(AppInfo.displayName)", systemImage: "macwindow") {
-                showMainWindow()
-            }
-            MenuActionButton(title: "Settings…", systemImage: "gearshape") {
-                openSettings()
-            }
-            MenuActionButton(title: "About \(AppInfo.displayName)", systemImage: "info.circle") {
-                dismiss()
-                showStandardAboutPanel()
-            }
-            MenuActionButton(title: "Check for Updates\u{2026}", systemImage: "arrow.down.circle") {
-                checkForUpdates()
-            }
-            .disabled(!updateController.canCheckForUpdates)
-            MenuActionButton(title: "Quit \(AppInfo.displayName)", systemImage: "power") {
-                NSApp.terminate(nil)
-            }
-        }
-    }
-
-    // MARK: - AppKit-hosted actions
-
-    /// This panel is shown from an AppKit `NSPopover`, not a `MenuBarExtra`
-    /// scene, so the SwiftUI `openWindow` / `openSettings` environment actions are
-    /// not available here. Drive the equivalents through notifications the
-    /// always-present pressure menubar label (which IS in a SwiftUI scene) handles
-    /// with the real environment actions.
-
-    private func showMainWindow() {
-        dismiss()
-        NotificationCenter.default.post(name: .macperfmonitorShowMainWindow, object: nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func openSettings() {
-        dismiss()
-        NSApp.activate(ignoringOtherApps: true)
-        // Routed to MenuBarWindowRouter's `openSettings` action — reliable, unlike
-        // `NSApp.sendAction("showSettingsWindow:")` from a popover with no key
-        // window, which silently did nothing.
-        NotificationCenter.default.post(name: .macperfmonitorShowSettings, object: nil)
-    }
-
-    /// Sparkle presents its own update window, so this needs no SwiftUI scene —
-    /// just dismiss the popover and bring the app forward so that window is key.
-    private func checkForUpdates() {
-        dismiss()
-        NSApp.activate(ignoringOtherApps: true)
-        updateController.checkForUpdates()
-    }
-}
-
-/// One row in the top-CPU list: icon, name, a CPU-trend sparkline, the current
-/// CPU percentage, and the shared per-row actions menu. Mirrors `MenuProcessRow`
-/// but keyed on CPU rather than footprint. A single click opens the process in
-/// the main window.
-struct CPUMenuProcessRow: View {
-    let process: ProcessSample
-    let trail: [Double]
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(nsImage: ProcessIconProvider.shared.icon(forPath: process.executablePath))
-                .resizable()
-                .frame(width: 16, height: 16)
-            Text(process.displayName)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Sparkline(values: trail, sampleCapacity: SamplerModel.processTrailCapacity)
-                .tint(.secondary)
-                .frame(width: 34, height: 14)
-            Text(CPUFormat.percent(process.cpuPercent))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .trailing)
-            ProcessRowMenuButton(identity: process.id, bringWindowForward: true)
-        }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(hovering ? Color.accentColor.opacity(0.14) : .clear)
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("\(process.displayName), \(CPUFormat.percent(process.cpuPercent)) CPU")
-        .accessibilityHint("Opens this process in the main window")
-        .processRowActions(identity: process.id, bringWindowForward: true, openOnSingleTap: true)
+    private var metric: MenuRankedMetric {
+        MenuRankedMetric(
+            parts: { [$0.cpuPercent] }, colors: [MenuPanelStyle.accent(.cpu)],
+            format: CPUFormat.percent, trail: { [model] in model.cpuTrail(for: $0) })
     }
 }
 
