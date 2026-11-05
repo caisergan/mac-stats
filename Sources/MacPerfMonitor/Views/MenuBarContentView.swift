@@ -2,114 +2,142 @@ import AppKit
 import MacPerfMonitorCore
 import SwiftUI
 
-/// The menubar dropdown panel (window style): a pressure summary with a live
-/// sparkline, the top ten processes by footprint, and the standard actions.
+/// The Memory tab of the menu bar panel: RAM in use with the pressure verdict
+/// beside it, the pressure trend, what the memory is made of, and the top
+/// consumers.
 struct MenuBarContentView: View {
     @EnvironmentObject private var model: SamplerModel
     /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
     @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
-    @EnvironmentObject private var updateController: UpdateController
     @EnvironmentObject private var menuClock: MenuClock
-    @EnvironmentObject private var components: AppComponentsManager
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
-    var embedded = false
-
-    /// Whether the top list shows one row per app (shared with the CPU
-    /// dropdown) and which apps are open.
-    @AppStorage("menuProcessGroupByApp") private var groupByApp = true
-    @State private var expandedApps: Set<String> = []
 
     var body: some View {
-        // Re-render once a second while the menu is open (and not at all while
-        // closed), so the live read-outs tick at 1 Hz independently of the main
-        // window's refresh rate. Depend on the clock's tick explicitly; refcount it
-        // open/closed from this view's lifecycle.
+        // Re-render once a second while the panel is open, so the live read-outs
+        // tick at 1 Hz independently of the main window's refresh rate.
         _ = menuClock.tick
-        return
-            panel
-            .background(MenuBarDismissOnResignKey())
-            .onAppear { if !embedded { menuClock.open() } }
-            .onDisappear { if !embedded { menuClock.close() } }
-    }
-
-    private var panel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            Divider()
-            topProcesses
-            if !embedded {
-                Divider()
-                actions
-                MenuVersionFooter()
-            }
+        return VStack(alignment: .leading, spacing: MenuPanelStyle.spacing) {
+            summaryCard
+            if let system = model.liveSystem { compositionCard(system) }
+            MenuRankedList(
+                title: "Top memory", metric: metric, apps: menuLists.topFootprintApps,
+                processes: menuLists.topFootprint)
         }
-        .padding(embedded ? 0 : 12)
-        .frame(width: embedded ? nil : 380)
     }
 
-    // MARK: - Header
+    // MARK: - Summary
 
-    private var header: some View {
+    private var summaryCard: some View {
         let system = model.liveSystem
         let level = system?.pressureLevel ?? .normal
-        return VStack(alignment: .leading, spacing: 6) {
-            // The verdict is named, not just stated. "Warning 47%" on its own
-            // reads as a share of something, and the panel is one line away
-            // from a RAM figure in the eighties: two unlike numbers, and
-            // nothing to say which is which. The pressure index is a 0 to 100
-            // health signal (docs/pressure-index.md), not a share of RAM.
-            HStack(spacing: 8) {
-                Image(systemName: level.symbolName)
-                    .foregroundStyle(level.color)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Memory pressure")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(level.label)
-                        .font(.headline)
-                        .foregroundStyle(level.color)
+        let accent = MenuPanelStyle.accent(.ram)
+        return MenuPanelCard {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                MenuPanelFigure(text: system.map { ByteFormat.string(usedBytes($0)) } ?? "--")
+                if let system, system.totalRAM > 0 {
+                    let share = Double(usedBytes(system)) / Double(system.totalRAM) * 100
+                    Text(
+                        verbatim:
+                            "\(t("of %@", ByteFormat.string(system.totalRAM))) · \(Int(share.rounded()))%"
+                    )
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
-                Spacer()
-                if let percent = system?.pressurePercent {
-                    Text("\(Int(percent.rounded()))%")
-                        .font(.headline.monospacedDigit())
-                        .foregroundStyle(level.color)
-                }
+                Spacer(minLength: 4)
+                // The verdict is named, not just stated. A bare "47" reads as a
+                // share of something, one word from a RAM figure in the eighties:
+                // two unlike numbers, and nothing to say which is which. The
+                // pressure index is a 0 to 100 health signal
+                // (docs/pressure-index.md), not a share of RAM.
+                MenuStatusPill(text: pressureText(level, system), color: level.color)
+                    .help(
+                        "How hard the memory system is working, 0 to 100: compression, swap, and the trend. Not the share of RAM in use, which is below."
+                    )
             }
-            .help(
-                "How hard the memory system is working, 0 to 100: compression, swap, and the trend. Not the share of RAM in use, which is below."
-            )
-
+            MenuChartHeader(title: "Memory pressure")
             MenuTrendChart(
-                series: model.menuTrend(.memoryPressure, range: chartRange), color: level.color,
+                series: model.menuTrend(.memoryPressure, range: chartRange),
+                color: level == .normal ? accent : level.color,
                 domain: 0...100, ticks: [0, 50, 100], label: { "\(Int($0))" },
                 readoutName: t("Memory pressure"), readoutValue: { "\(Int($0.rounded()))%" }
             )
             .frame(height: MenuChart.height)
-
-            if let system {
-                HStack(spacing: 5) {
-                    Text("\(ByteFormat.string(usedBytes(system))) used")
-                    // The share the RAM read-out shows, spelled out here so the
-                    // two figures in this panel are told apart rather than
-                    // guessed at.
-                    if system.totalRAM > 0 {
-                        let share =
-                            Double(usedBytes(system)) / Double(system.totalRAM) * 100
-                        Text(verbatim: "(\(Int(share.rounded()))%)")
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    Text("\(ByteFormat.string(system.totalRAM)) total")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                swapLine(system)
-            }
         }
+    }
+
+    private func pressureText(_ level: PressureLevel, _ system: SystemSample?) -> String {
+        guard let percent = system?.pressurePercent else {
+            return t("Pressure: %@", level.label)
+        }
+        return t("Pressure: %@", "\(level.label) \(Int(percent.rounded()))")
+    }
+
+    // MARK: - Composition
+
+    private func compositionCard(_ system: SystemSample) -> some View {
+        let accent = MenuPanelStyle.accent(.ram)
+        let total = Double(max(system.totalRAM, 1))
+        let parts: [(label: String, bytes: UInt64, color: Color)] = [
+            (t("App"), system.appMemory, accent),
+            (t("Wired"), system.wired, accent.opacity(0.55)),
+            (t("Compressed"), system.compressed, accent.opacity(0.3)),
+        ]
+        let used = usedBytes(system)
+        let free = system.totalRAM > used ? system.totalRAM - used : 0
+        return MenuPanelCard {
+            GeometryReader { geometry in
+                HStack(spacing: 2) {
+                    ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                        Rectangle()
+                            .fill(part.color)
+                            .frame(width: geometry.size.width * Double(part.bytes) / total)
+                    }
+                }
+                .frame(width: geometry.size.width, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .background(MenuPanelStyle.well)
+                .clipShape(Capsule())
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
+                GridRow {
+                    legendRow(parts[0].color, parts[0].label, parts[0].bytes)
+                    legendRow(parts[1].color, parts[1].label, parts[1].bytes)
+                }
+                GridRow {
+                    legendRow(parts[2].color, parts[2].label, parts[2].bytes)
+                    legendRow(nil, t("Free"), free)
+                }
+            }
+            .padding(.top, 9)
+            swapLine(system)
+                .padding(.top, 8)
+        }
+    }
+
+    private func legendRow(_ color: Color?, _ label: String, _ bytes: UInt64) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(color ?? Color.clear)
+                .overlay {
+                    if color == nil {
+                        RoundedRectangle(cornerRadius: 2.5)
+                            .strokeBorder(Color.secondary.opacity(0.6))
+                    }
+                }
+                .frame(width: 8, height: 8)
+            Text(label)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(ByteFormat.string(bytes))
+                .font(MenuPanelStyle.valueFont(size: 11.5))
+                .lineLimit(1)
+        }
+        .font(.system(size: 11.5))
+        .accessibilityElement(children: .combine)
     }
 
     /// How much memory has been pushed out to disk.
@@ -134,7 +162,7 @@ struct MenuBarContentView: View {
             }
             Spacer()
         }
-        .font(.caption)
+        .font(.system(size: 11.5))
         .foregroundStyle(.secondary)
         .help(
             "Swap is memory moved out to disk. A flat line at zero is ideal; a sustained climb under pressure is the real warning sign."
@@ -147,173 +175,14 @@ struct MenuBarContentView: View {
         system.appMemory &+ system.wired &+ system.compressed
     }
 
-    // MARK: - Top processes
+    // MARK: - Top consumers
 
-    private var topProcesses: some View {
-        let top = menuLists.topFootprint
-        let apps = menuLists.topFootprintApps
-        return VStack(alignment: .leading, spacing: 0) {
-            MenuProcessListHeader(title: "Top memory", groupByApp: $groupByApp)
-
-            if groupByApp ? apps.isEmpty : top.isEmpty {
-                Text("Sampling…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 8)
-            } else if groupByApp {
-                ForEach(apps) { app in
-                    MenuAppGroupRow(
-                        group: app,
-                        value: ByteFormat.string(app.physFootprint),
-                        valueWidth: 60,
-                        trail: MenuTrail.sum(app.processes.map { model.trail(for: $0.id) }),
-                        isExpanded: expandedApps.contains(app.id),
-                        toggle: { expandedApps.formSymmetricDifference([app.id]) }
-                    ) { process in
-                        MenuProcessRow(
-                            process: process,
-                            trail: model.trail(for: process.id),
-                            isLeaking: model.leakingProcessIDs.contains(process.id))
-                    }
-                }
-            } else {
-                ForEach(top) { process in
-                    MenuProcessRow(
-                        process: process,
-                        trail: model.trail(for: process.id),
-                        isLeaking: model.leakingProcessIDs.contains(process.id)
-                    )
-                }
-            }
-        }
-    }
-
-    // MARK: - Actions
-
-    private var actions: some View {
-        VStack(spacing: 2) {
-            MenuActionButton(title: "Open \(AppInfo.displayName)", systemImage: "macwindow") {
-                openWindow(id: WindowID.main)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-
-            // Quick switch between the two function modes without opening Settings.
-            // Full logs samples to the on-disk history; menu-bar-only stops all
-            // writes and keeps just the live read-outs.
-            MenuActionButton(
-                title: components.historyLogging
-                    ? LocalizedStringKey("Pause history logging")
-                    : LocalizedStringKey("Resume history logging"),
-                systemImage: components.historyLogging ? "pause.circle" : "record.circle"
-            ) {
-                components.historyLogging.toggle()
-            }
-
-            // A plain SettingsLink does not reliably surface the Settings window
-            // from an accessory (LSUIElement) menubar app: the window can open
-            // behind everything while the app stays unactivated, so the click
-            // looks like it does nothing. Open settings programmatically and
-            // activate the app so the window comes to the front.
-            MenuActionButton(title: "Settings…", systemImage: "gearshape") {
-                openSettings()
-                NSApp.activate(ignoringOtherApps: true)
-            }
-
-            MenuActionButton(
-                title: "How \(AppInfo.displayName) works\u{2026}",
-                systemImage: "questionmark.circle"
-            ) {
-                openWindow(id: WindowID.onboarding)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-
-            MenuActionButton(title: "About \(AppInfo.displayName)", systemImage: "info.circle") {
-                showStandardAboutPanel()
-            }
-
-            MenuActionButton(title: "Check for Updates\u{2026}", systemImage: "arrow.down.circle") {
-                updateController.checkForUpdates()
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            .disabled(!updateController.canCheckForUpdates)
-
-            MenuActionButton(title: "Quit \(AppInfo.displayName)", systemImage: "power") {
-                NSApp.terminate(nil)
-            }
-        }
-    }
-}
-
-/// One row in the top-memory list: icon, name, trend sparkline, footprint, and
-/// an always-visible actions menu (the menubar panel can't rely on right-click).
-/// A single click anywhere on the row opens the process in the main window; the
-/// ellipsis menu and right-click still carry Reveal and Force Quit.
-struct MenuProcessRow: View {
-    let process: ProcessSample
-    let trail: [Double]
-    var isLeaking = false
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(nsImage: ProcessIconProvider.shared.icon(forPath: process.executablePath))
-                .resizable()
-                .frame(width: 16, height: 16)
-            // Let the name group take all the free width so long names use the
-            // space instead of truncating early next to a wide empty gap. Use
-            // displayName, not name: the kernel's p_comm is capped at 16 chars,
-            // so names like "wdavdaemon_unprivileged" or "Code Helper (Renderer)"
-            // arrive pre-truncated and displayName recovers the full name from
-            // the executable path. The trailing sparkline/value/menu keep their
-            // intrinsic widths and stay aligned on the right edge.
-            HStack(spacing: 4) {
-                Text(process.displayName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if isLeaking {
-                    LeakIndicator()
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Sparkline(values: trail, sampleCapacity: SamplerModel.processTrailCapacity)
-                .tint(.secondary)
-                .frame(width: 34, height: 14)
-            Text(ByteFormat.string(process.physFootprint))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .trailing)
-            ProcessRowMenuButton(identity: process.id, bringWindowForward: true)
-        }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(hovering ? Color.accentColor.opacity(0.14) : .clear)
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens this process in the main window")
-        .processRowActions(identity: process.id, bringWindowForward: true, openOnSingleTap: true)
-    }
-
-    private var accessibilityLabel: String {
-        let base = "\(process.displayName), \(ByteFormat.string(process.physFootprint))"
-        return isLeaking ? "\(base), possible memory leak" : base
-    }
-}
-
-/// The app version + build, shown centred at the bottom of every menu-bar
-/// dropdown. Reads CFBundleShortVersionString / CFBundleVersion via `AppInfo`.
-struct MenuVersionFooter: View {
-    var body: some View {
-        Text("\(AppInfo.displayName) \(AppInfo.version) (\(AppInfo.build))")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .accessibilityLabel(t("Version %1$@, build %2$@", AppInfo.version, AppInfo.build))
+    private var metric: MenuRankedMetric {
+        MenuRankedMetric(
+            parts: { [Double($0.physFootprint)] }, colors: [MenuPanelStyle.accent(.ram)],
+            format: { ByteFormat.string(UInt64(max($0, 0))) }, valueWidth: 54,
+            trail: { [model] in model.trail(for: $0) },
+            isLeaking: { [model] in model.leakingProcessIDs.contains($0.id) })
     }
 }
 
@@ -323,90 +192,4 @@ struct MenuVersionFooter: View {
 @MainActor func showStandardAboutPanel() {
     NSApp.activate(ignoringOtherApps: true)
     NSApp.orderFrontStandardAboutPanel(options: [:])
-}
-
-/// A full-width, hover-highlighted menu action button.
-///
-/// `title` is a plain `String` and is rendered verbatim: every call site names
-/// the app in its title, so the caller resolves the whole sentence through
-/// `t("Open %@", AppInfo.displayName)` and hands the finished text over. Taking a
-/// `LocalizedStringKey` here would be wrong, because an interpolated title is not
-/// a key.
-struct MenuActionButton: View {
-    let title: LocalizedStringKey
-    let systemImage: String
-    let action: () -> Void
-
-    init(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) {
-        self.title = title
-        self.systemImage = systemImage
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(MenuActionButtonStyle())
-    }
-}
-
-struct MenuActionButtonStyle: ButtonStyle {
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(hovering ? Color.accentColor.opacity(0.18) : .clear)
-            )
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .opacity(configuration.isPressed ? 0.6 : 1)
-    }
-}
-
-/// Closes the memory MenuBarExtra's `.window` panel when it stops being the key
-/// window — the user clicked another menu-bar item, a window, or the desktop.
-/// SwiftUI's `.window`-style `MenuBarExtra` does not dismiss itself when the click
-/// lands on another status item (the CPU/Energy/Network items, which are AppKit
-/// popovers), so without this the pressure panel would stay open. Ordering the
-/// panel out matches what SwiftUI itself does when the label is toggled closed, so
-/// the next click on the label reopens it normally.
-private struct MenuBarDismissOnResignKey: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async { context.coordinator.attach(to: view.window) }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if context.coordinator.window == nil {
-            DispatchQueue.main.async { context.coordinator.attach(to: nsView.window) }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator {
-        private(set) weak var window: NSWindow?
-        private var token: NSObjectProtocol?
-
-        func attach(to window: NSWindow?) {
-            guard let window, self.window !== window else { return }
-            self.window = window
-            if let token { NotificationCenter.default.removeObserver(token) }
-            token = NotificationCenter.default.addObserver(
-                forName: NSWindow.didResignKeyNotification, object: window, queue: .main
-            ) { [weak window] _ in
-                window?.orderOut(nil)
-            }
-        }
-
-        deinit { if let token { NotificationCenter.default.removeObserver(token) } }
-    }
 }

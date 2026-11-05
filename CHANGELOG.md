@@ -9,8 +9,7 @@ Notable changes to Mac Performance Monitor. This project follows
 ### Added
 
 - A chart range for the menu bar panel: 1 min, 5 min, 15 min or 1 hr, picked
-  beside Alerts at the top of the panel or in Settings, and shared by every
-  tab. One minute plots every sample; the longer ranges plot averages inside
+  above each chart or in Settings, and shared by every tab. One minute plots every sample; the longer ranges plot averages inside
   a band out to the lowest and highest readings, so a brief spike still shows
   in an hour long chart. With history logging on, the longer ranges open on
   the recorded last hour rather than an empty plot after a launch, and time
@@ -52,6 +51,20 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Changed
 
+- The menu bar panel is redesigned. Every tab now sits on rounded cards, with
+  a large figure and a status pill above its chart, and one accent colour per
+  metric. The strip at the top shows each metric's symbol over its live figure,
+  and the footer is Open, Alerts, Settings and a More menu, which now holds the
+  version too.
+  - Every list groups by app (GPU, Energy, Network and Disk join CPU and Memory)
+    and has usage bars. Hovering a row shows its trend and its actions.
+  - Memory gains a breakdown of App, Wired, Compressed and Free. The load
+    averages leave the CPU tab, and stay on the Dashboard and in the main
+    window's header.
+  - Sensors leads with total power, the hottest CPU and GPU and the fans. Each
+    core's temperature is folded under CPU and GPU, opening separately as a heat
+    grid, and power splits into what supplies the Mac and what consumes it.
+  - Alerts moves to a bell in the footer, with a banner only while one is active.
 - A new Compact menu bar design, now the default: every read-out is the
   metric's symbol and its value on one line, in the menu bar's own font, so the
   items sit beside the clock like system items. Settings > Menu Bar has a Style

@@ -101,7 +101,7 @@ final class AlertsMenuBarTests: XCTestCase {
             defer { window.close() }
             host.layoutSubtreeIfNeeded()
             XCTAssertEqual(host.fittingSize.width, 380, accuracy: 1)
-            XCTAssertEqual(host.fittingSize.height, 320, accuracy: 1)
+            XCTAssertEqual(host.fittingSize.height, rows.isEmpty ? 110 : 320, accuracy: 1)
             let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             XCTAssertGreaterThan(bitmap.pixelsWide, 0)

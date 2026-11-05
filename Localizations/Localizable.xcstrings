@@ -14034,36 +14034,6 @@
         }
       }
     },
-    "Observations: %@" : {
-      "comment" : "Quiet observation count, outside the red alert count. AI-generated translations; native-speaker review pending.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Beobachtungen: %@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Observations: %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Observations : %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "观察项：%@"
-          }
-        }
-      }
-    },
     "Alert evidence" : {
       "comment" : "Captured evidence in Explorer, available even without full history. AI-generated translations; native-speaker review pending.",
       "extractionState" : "manual",
@@ -24002,36 +23972,6 @@
         }
       }
     },
-    "1, 5 and 15-minute load averages (run-queue length)." : {
-      "comment" : "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Durchschnittliche Auslastung über 1, 5 und 15 Minuten (Länge der Run-Queue)."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1, 5 and 15-minute load averages (run-queue length)."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Charges moyennes sur 1, 5 et 15 minutes (longueur de la file d'exécution)."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1、5、15 分钟平均负载（运行队列长度）。"
-          }
-        }
-      }
-    },
     "10 MB and up" : {
       "comment" : "Disk Map (1.6.0)",
       "extractionState" : "manual",
@@ -26462,23 +26402,6 @@
         }
       }
     },
-    "All cores" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All cores"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "所有核心"
-          }
-        }
-      }
-    },
     "All good" : {
       "comment" : "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState" : "manual",
@@ -27974,23 +27897,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「平均」会把窗口内的尖峰抹平；「峰值」显示该组达到过的最高值。"
-          }
-        }
-      }
-    },
-    "Averages only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Averages only"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅平均值"
           }
         }
       }
@@ -41395,23 +41301,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "即使开启了完整覆盖，macOS 仍拒绝结束“%@”。"
-          }
-        }
-      }
-    },
-    "Every CPU and GPU core reports its own temperature, and they track each other closely. The averages stand in for them unless you ask for the detail." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Every CPU and GPU core reports its own temperature, and they track each other closely. The averages stand in for them unless you ask for the detail."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每个 CPU 和 GPU 核心都会报告自己的温度，而它们彼此非常接近。除非你要求查看细节，否则将用平均值代表它们。"
           }
         }
       }
@@ -60880,36 +60769,6 @@
         }
       }
     },
-    "Open %@" : {
-      "comment" : "Menu Bar Panels",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ öffnen"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvrir %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开 %@"
-          }
-        }
-      }
-    },
     "Open Dashboard" : {
       "comment" : "CombinedMenuBarContentView",
       "extractionState" : "manual",
@@ -61596,66 +61455,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在地图中打开"
-          }
-        }
-      }
-    },
-    "Open the Energy tab" : {
-      "comment" : "Menu Bar Panels",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tab „Energie“ öffnen"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open the Energy tab"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvrir l'onglet Énergie"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开能耗标签页"
-          }
-        }
-      }
-    },
-    "Open the Network tab" : {
-      "comment" : "Menu Bar Panels",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tab „Netzwerk“ öffnen"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open the Network tab"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvrir l'onglet Réseau"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开网络标签页"
           }
         }
       }
@@ -70122,36 +69921,6 @@
         }
       }
     },
-    "Sampling..." : {
-      "comment" : "Menu Bar Panels",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Messung läuft ..."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sampling..."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Échantillonnage..."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在采样…"
-          }
-        }
-      }
-    },
     "Sampling…" : {
       "comment" : "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
       "extractionState" : "manual",
@@ -72013,36 +71782,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设置"
-          }
-        }
-      }
-    },
-    "Settings…" : {
-      "comment" : "Identity entries: English renders the key verbatim. Present so the two tables mirror each other and English copy stays auditable in one place; check-localization.py enforces the parity.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Einstellungen …"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Settings…"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Réglages…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置…"
           }
         }
       }
@@ -77998,36 +77737,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无"
-          }
-        }
-      }
-    },
-    "Thermal pressure" : {
-      "comment" : "Menu Bar Panels",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Thermischer Druck"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Thermal pressure"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pression thermique"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "散热压力"
           }
         }
       }
@@ -88032,6 +87741,306 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "面板图表显示的历史时长。1 分钟绘制每个采样；更长的范围绘制平均值，并以色带标出最低和最高读数。面板中图表上方也有同样的控制。"
+          }
+        }
+      }
+    },
+    "+%@ more" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%@ weitere"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%@ more"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%@ autres"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另外 %@ 项"
+          }
+        }
+      }
+    },
+    "Pressure: %@" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Druck: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pressure: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pression : %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压力：%@"
+          }
+        }
+      }
+    },
+    "Session download" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download dieser Sitzung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session download"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Téléchargé (session)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次会话下载"
+          }
+        }
+      }
+    },
+    "Session upload" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upload dieser Sitzung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session upload"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyé (session)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次会话上传"
+          }
+        }
+      }
+    },
+    "Thermal pressure: %@" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thermischer Druck: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thermal pressure: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pression thermique : %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "散热压力：%@"
+          }
+        }
+      }
+    },
+    "Shows the active alerts" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeigt die aktiven Warnungen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the active alerts"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiche les alertes actives"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示活动警报"
+          }
+        }
+      }
+    },
+    "Components" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Komponenten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Components"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Composants"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "组件"
+          }
+        }
+      }
+    },
+    "Power and electrical" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leistung und Elektrik"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Power and electrical"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puissance et électricité"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "功率与电气"
+          }
+        }
+      }
+    },
+    "Supply" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versorgung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supply"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alimentation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "供电"
+          }
+        }
+      }
+    },
+    "avg" : {
+      "comment" : "Menu Bar Panels",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ø"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avg"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "moy."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平均"
           }
         }
       }

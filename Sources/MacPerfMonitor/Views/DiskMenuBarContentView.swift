@@ -2,23 +2,43 @@ import AppKit
 import MacPerfMonitorCore
 import SwiftUI
 
-/// Physical disk activity plus task-attributed I/O. The two sections are
-/// deliberately labeled separately because process counters do not exactly add
-/// up to block-device traffic across caching, metadata, paging, and kernel work.
+/// The Disk tab of the menu bar panel: physical disk activity plus
+/// task-attributed I/O. The two are deliberately labelled separately because
+/// process counters do not exactly add up to block-device traffic across caching,
+/// metadata, paging, and kernel work.
 struct DiskMenuBarContentView: View {
-    private static let processRowCount = 8
-    private static let processRowHeight: CGFloat = 22
-
     @EnvironmentObject private var model: SamplerModel
     /// The panel charts' time range, shared by every tab (see `MenuChartRange`).
     @AppStorage(MenuChartRange.defaultsKey) private var chartRange = MenuChartRange.default
     @EnvironmentObject private var menuLists: MenuListsModel
 
-    var dismiss: () -> Void = {}
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
+        VStack(alignment: .leading, spacing: MenuPanelStyle.spacing) {
+            activityCard
+            MenuPanelCard {
+                MenuPanelHeading(title: "Physical devices")
+                    .padding(.bottom, 6)
+                devices
+            }
+            topProcesses
+        }
+    }
+
+    private var activityCard: some View {
+        let rates = model.diskRates
+        return MenuPanelCard {
+            HStack(alignment: .lastTextBaseline, spacing: 22) {
+                MenuRateFigure(
+                    symbol: "arrow.down", tint: DiskStyle.read,
+                    text: rates.map { ByteFormat.rate($0.readBytesPerSec) } ?? "--", label: "Read")
+                MenuRateFigure(
+                    symbol: "arrow.up", tint: DiskStyle.write,
+                    text: rates.map { ByteFormat.rate($0.writeBytesPerSec) } ?? "--", label: "Write"
+                )
+                Spacer(minLength: 0)
+                if let disk = model.latestDisk { iops(disk) }
+            }
+            MenuChartHeader(title: "Throughput")
             MenuMirroredChart(
                 up: .init(
                     series: model.menuTrend(.diskRead, range: chartRange), name: t("Read"),
@@ -28,35 +48,11 @@ struct DiskMenuBarContentView: View {
                     color: DiskStyle.write)
             )
             .frame(height: MenuChart.networkHeight)
-            if let disk = model.latestDisk { activitySummary(disk) }
-            Divider()
-            devices
-            Divider()
-            topProcesses
         }
     }
 
-    private var header: some View {
-        let rates = model.diskRates
-        return HStack(spacing: 20) {
-            rateColumn("Read", rates?.readBytesPerSec, tint: DiskStyle.read)
-            rateColumn("Write", rates?.writeBytesPerSec, tint: DiskStyle.write)
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func rateColumn(_ title: LocalizedStringKey, _ rate: Double?, tint: Color) -> some View
-    {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(rate.map { ByteFormat.rate($0) } ?? "--")
-                .font(.title3.weight(.semibold).monospacedDigit())
-                .foregroundStyle(tint)
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    private func activitySummary(_ disk: DiskSample) -> some View {
-        HStack(spacing: 14) {
+    private func iops(_ disk: DiskSample) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
             Text(
                 String(
                     format: String(localized: "%d read IOPS"),
@@ -65,10 +61,10 @@ struct DiskMenuBarContentView: View {
                 String(
                     format: String(localized: "%d write IOPS"),
                     Int(disk.writeOperationsPerSec.rounded())))
-            Spacer()
         }
-        .font(.caption.monospacedDigit())
+        .font(.system(size: 11.5).monospacedDigit())
         .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 
     @ViewBuilder private var devices: some View {
@@ -77,9 +73,6 @@ struct DiskMenuBarContentView: View {
             return $0.bsdName.localizedStandardCompare($1.bsdName) == .orderedAscending
         }
         VStack(alignment: .leading, spacing: 5) {
-            Text("Physical devices")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             if items.isEmpty {
                 Text("Reading storage devices...")
                     .font(.callout)
@@ -94,50 +87,29 @@ struct DiskMenuBarContentView: View {
     }
 
     private var topProcesses: some View {
-        let rows = Array(menuLists.topDisk.prefix(Self.processRowCount))
-        return VStack(alignment: .leading, spacing: 0) {
-            Text("Process-attributed I/O")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
-            ZStack(alignment: .topLeading) {
-                if rows.isEmpty {
-                    Text("Sampling...")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 3)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(rows) { process in processRow(process) }
-                }
+        MenuRankedList(
+            title: "Process-attributed I/O",
+            metric: MenuRankedMetric(
+                parts: { [$0.diskReadBytesPerSec, $0.diskWriteBytesPerSec] },
+                colors: [DiskStyle.read, DiskStyle.write],
+                format: { ByteFormat.rate($0) }, valueWidth: 62,
+                trail: { [model] in model.diskTrail(for: $0) }),
+            apps: menuLists.topDiskApps, processes: menuLists.topDisk
+        ) {
+            HStack(spacing: 3) {
+                Text("Read").foregroundStyle(DiskStyle.read)
+                Text(verbatim: "·").foregroundStyle(.tertiary)
+                Text("Write").foregroundStyle(DiskStyle.write)
             }
-            .frame(
-                height: Self.processRowHeight * CGFloat(Self.processRowCount),
-                alignment: .top
-            )
+            .font(.system(size: 11))
+        } footer: {
             Text("Process totals may differ from physical device activity.")
-                .font(.caption2)
+                .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
                 .padding(.top, 4)
+                .padding(.bottom, 2)
         }
-    }
-
-    private func processRow(_ process: ProcessSample) -> some View {
-        HStack(spacing: 8) {
-            Image(nsImage: ProcessIconProvider.shared.icon(forPath: process.executablePath))
-                .resizable()
-                .frame(width: 16, height: 16)
-            Text(process.displayName)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(ByteFormat.rate(process.diskReadBytesPerSec)) R")
-                .foregroundStyle(DiskStyle.read)
-            Text("\(ByteFormat.rate(process.diskWriteBytesPerSec)) W")
-                .foregroundStyle(DiskStyle.write)
-        }
-        .font(.caption.monospacedDigit())
-        .frame(height: Self.processRowHeight)
     }
 }
 

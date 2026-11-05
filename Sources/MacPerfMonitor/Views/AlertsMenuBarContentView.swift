@@ -55,8 +55,14 @@ struct AlertsMenuBarContentView: View {
         let groups = MenuBarAlertGroup.groups(alerts: alerts, processes: processes)
         Group {
             if groups.isEmpty, observations.isEmpty {
-                ContentUnavailableView("No active alerts", systemImage: "checkmark.circle")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 20))
+                    Text("No active alerts")
+                        .font(.system(size: 12.5))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -184,7 +190,8 @@ struct AlertsMenuBarContentView: View {
                 }
             }
         }
-        .frame(height: 320)
+        // Nothing to list costs little; a list gets room and scrolls past it.
+        .frame(height: alerts.isEmpty && observations.isEmpty ? 110 : 320)
         .accessibilityIdentifier("menubar.alerts.list")
     }
 

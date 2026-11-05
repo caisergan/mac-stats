@@ -10,12 +10,12 @@ import XCTest
 final class MetricCardPresentationTests: XCTestCase {
     func testNativeANEMenuChartsFitAndUpdateWithoutExtraSampling() async throws {
         _ = NSApplication.shared
-        for (name, embedded, appearance) in [
-            ("ane-menu-active", false, NSAppearance.Name.aqua),
-            ("ane-menu-partial", true, NSAppearance.Name.darkAqua),
-            ("ane-menu-helper", false, NSAppearance.Name.darkAqua),
-            ("ane-menu-unavailable", true, NSAppearance.Name.aqua),
-            ("ane-menu-idle", false, NSAppearance.Name.aqua),
+        for (name, appearance) in [
+            ("ane-menu-active", NSAppearance.Name.aqua),
+            ("ane-menu-partial", .darkAqua),
+            ("ane-menu-helper", .darkAqua),
+            ("ane-menu-unavailable", .aqua),
+            ("ane-menu-idle", .aqua),
         ] {
             let now = Date()
             let noHelper = name.hasSuffix("helper")
@@ -73,22 +73,15 @@ final class MetricCardPresentationTests: XCTestCase {
                     process.gpuPercent = Double(16 - index)
                     return process
                 })
-            let width: CGFloat = embedded ? 404 : 300
+            let width: CGFloat = 380
             let appeared = expectation(description: "ANE menu charts appear")
             let host = NSHostingView(
-                rootView: VStack(spacing: 10) {
-                    GPUMenuBarContentView(embedded: embedded)
-                    if embedded {
-                        Divider()
-                        Text("Open GPU").font(.caption)
-                    }
-                }
-                .padding(embedded ? 12 : 0)
-                .frame(width: width)
-                .environmentObject(model)
-                .environmentObject(model.menuLists)
-                .environmentObject(clock)
-                .onAppear { DispatchQueue.main.async { appeared.fulfill() } })
+                rootView: GPUMenuBarContentView()
+                    .frame(width: width)
+                    .environmentObject(model)
+                    .environmentObject(model.menuLists)
+                    .environmentObject(clock)
+                    .onAppear { DispatchQueue.main.async { appeared.fulfill() } })
             let window = NSWindow(
                 contentRect: CGRect(x: 100, y: 80, width: width, height: 700),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -105,7 +98,7 @@ final class MetricCardPresentationTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             let size = host.fittingSize
             XCTAssertEqual(size.width, width, accuracy: 1)
-            XCTAssertLessThanOrEqual(size.height, 690)
+            XCTAssertLessThanOrEqual(size.height, 760)
             window.setContentSize(size)
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
@@ -116,7 +109,7 @@ final class MetricCardPresentationTests: XCTestCase {
             let powerChart = try XCTUnwrap(
                 charts.first { $0.feed?.model.accessibilityLabel == t("ANE power") })
             for chart in [timeChart, powerChart] {
-                XCTAssertEqual(chart.bounds.height, 62, accuracy: 1)
+                XCTAssertEqual(chart.bounds.height, 44, accuracy: 1)
                 XCTAssertTrue(chart.scrubbable)
                 XCTAssertTrue(host.bounds.contains(chart.convert(chart.bounds, to: host)))
             }
@@ -126,17 +119,7 @@ final class MetricCardPresentationTests: XCTestCase {
             XCTAssertEqual(powerValues.contains(where: \.isFinite), !unavailable && !noHelper)
             XCTAssertTrue(timeValues.contains(where: \.isNaN))
             XCTAssertTrue(powerValues.contains(where: \.isNaN))
-            let scroll = try XCTUnwrap(descendants(of: host, type: NSScrollView.self).first)
-            let document = try XCTUnwrap(scroll.documentView)
-            for chart in charts {
-                let chartFrame = chart.convert(chart.bounds, to: scroll.contentView)
-                XCTAssertLessThanOrEqual(chartFrame.maxX, scroll.contentView.bounds.maxX - 2)
-            }
-            XCTAssertGreaterThan(document.bounds.height, scroll.contentView.bounds.height)
             try captureGPUWindow(window, name: name)
-            document.scroll(CGPoint(x: 0, y: document.bounds.height))
-            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
-            document.scroll(.zero)
             let update = aneMenuSample(at: Date(), time: 250, power: noHelper ? nil : 1.5)
             model.publishForBenchmark(
                 .init(system: update, processes: [], unreadableProcessCount: 0),
@@ -252,10 +235,10 @@ final class MetricCardPresentationTests: XCTestCase {
         XCTAssertFalse(ANEMenuHistory(samples: [], now: now).hasPartialTime)
     }
 
-    func testGPUMenuReservesRoomForCommandsOnSmallerDisplays() {
-        XCTAssertEqual(GPUMenuBarContentView.contentHeight(screenHeight: 900, embedded: true), 600)
-        XCTAssertEqual(GPUMenuBarContentView.contentHeight(screenHeight: 650, embedded: true), 440)
-        XCTAssertEqual(GPUMenuBarContentView.contentHeight(screenHeight: 650, embedded: false), 580)
+    func testPanelReservesRoomForItsFrameOnSmallerDisplays() {
+        XCTAssertEqual(MenuPanelStyle.maximumContentHeight(screenHeight: 900), 620)
+        XCTAssertEqual(MenuPanelStyle.maximumContentHeight(screenHeight: 650), 440)
+        XCTAssertEqual(MenuPanelStyle.maximumContentHeight(screenHeight: 300), 200)
     }
 
     func testGPUAwakeCardHasRecordedHistoryAndIsNotGPUUtilization() throws {

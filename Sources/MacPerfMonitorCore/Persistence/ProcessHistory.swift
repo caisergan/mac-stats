@@ -24,6 +24,9 @@ public struct ProcessHistoryPoint: Sendable, Identifiable, Equatable {
     public var networkBytesPerSec: Double
     /// GPU share at this point (percent of one GPU); 0 on rows older than v13.
     public var gpuPercent: Double
+    /// Energy impact at this point, for the live trail only: it is not stored,
+    /// so a point read back from the database reports 0.
+    public var energyImpact: Double
     /// True for the first point from a predecessor or successor process
     /// instance. Renderers use this to break the line across a restart even
     /// when the two instances were sampled only seconds apart.
@@ -40,6 +43,7 @@ public struct ProcessHistoryPoint: Sendable, Identifiable, Equatable {
         diskWritten: UInt64,
         networkBytesPerSec: Double = 0,
         gpuPercent: Double = 0,
+        energyImpact: Double = 0,
         startsNewRun: Bool = false
     ) {
         self.date = date
@@ -50,6 +54,7 @@ public struct ProcessHistoryPoint: Sendable, Identifiable, Equatable {
         self.diskWritten = diskWritten
         self.networkBytesPerSec = networkBytesPerSec
         self.gpuPercent = gpuPercent
+        self.energyImpact = energyImpact
         self.startsNewRun = startsNewRun
     }
 }
