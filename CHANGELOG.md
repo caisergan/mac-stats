@@ -121,6 +121,12 @@ Notable changes to Mac Performance Monitor. This project follows
 
 ### Fixed
 
+- The menu bar panel's Top network apps list now updates every second while the
+  Network tab is open, in step with the rest of the panel. It used to refresh
+  every five seconds at best, so a finished download could sit at the top of
+  the list while the figures above it read 0 B/s. Rows are ranked by a short
+  average so the order holds still while their figures change.
+
 - Force Quit checks a process's start time immediately before killing it, so
   a process that exited while the confirmation was open can no longer take an
   unrelated process down with it once macOS reuses its PID.

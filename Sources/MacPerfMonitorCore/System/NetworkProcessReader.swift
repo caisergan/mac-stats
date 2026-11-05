@@ -16,8 +16,8 @@ import os.log
 /// refresh less often — it no longer throttles sampling.
 ///
 /// `start()` launches the loop; `stop()` halts it. A hard timeout guards against
-/// a wedged nettop. Pacing (`paceSleep`) runs at two speeds depending on whether
-/// anything is displaying per-app rates; see `setInteractive`.
+/// a wedged nettop. Pacing (`paceSleep`) runs at three speeds depending on who is
+/// displaying per-app rates; see `Pace`.
 /// `CPUMath.delta` clamps the occasional counter decrease (a flow closing, or a
 /// counter reset) to zero.
 public final class NetworkProcessReader {
@@ -33,8 +33,35 @@ public final class NetworkProcessReader {
 
     private static let log = Logger(subsystem: "uk.co.bzwrd.macperfmonitor", category: "nettop")
     private static let toolPath = "/usr/bin/nettop"
-    /// Cadence floor while something on screen is showing per-app rates.
-    static let interactiveRefreshInterval: TimeInterval = 5
+
+    /// Who the reader is working for, which sets how often it runs nettop.
+    public enum Pace: Sendable, Equatable {
+        /// A read-out meant to be watched is on screen (the Network tab of the
+        /// menu bar panel, whose other figures all move at 1 Hz).
+        case live
+        /// Per-app rates are somewhere in the main window, on the table cadence.
+        case display
+        /// Nothing is showing them; the reader only feeds the byte history.
+        case background
+
+        var refreshFloor: TimeInterval {
+            switch self {
+            case .live: return NetworkProcessReader.liveRefreshInterval
+            case .display: return NetworkProcessReader.displayRefreshInterval
+            case .background: return NetworkProcessReader.backgroundRefreshInterval
+            }
+        }
+    }
+
+    /// Cadence floor while the panel's Network tab is open. A panel stays open
+    /// for moments, not hours, so this does not reopen the all-day spawn churn
+    /// in docs/fd-count-1620-diagnosis.md. Why repeated one-shots rather than a
+    /// resident `nettop -L 0`: with stdout on a pipe nettop block-buffers it, and
+    /// delivers 16 KB every 12 to 13 s (measured, macOS 26), and the pty that
+    /// would defeat the buffering is what once cost ~140% CPU.
+    static let liveRefreshInterval: TimeInterval = 1
+    /// Cadence floor while the main window is showing per-app rates.
+    static let displayRefreshInterval: TimeInterval = 5
     /// Cadence floor when nothing is: the reader is then only feeding the
     /// per-app byte history, which is bucketed to the minute, so anything under
     /// half a bucket is resolution nobody can see.
@@ -42,10 +69,10 @@ public final class NetworkProcessReader {
 
     /// How long to pause after a run that took `elapsed` seconds.
     ///
-    /// Interactive: the floor's remainder and nothing more, so a machine where
-    /// a run takes about as long as the floor (measured ~5 s here) keeps nettop
-    /// running continuously and the figures land every five seconds. That is
-    /// what a visible read-out is worth.
+    /// Live and display: the floor's remainder and nothing more, so a machine
+    /// where a run takes longer than the floor (measured ~5 s on some) keeps
+    /// nettop running continuously and the figures land as fast as it can
+    /// produce them. That is what a visible read-out is worth.
     ///
     /// Background: the larger floor, plus at least twice the run duration so
     /// nettop occupies at most ~1/3 of wall time however slow it gets. The
@@ -60,20 +87,20 @@ public final class NetworkProcessReader {
     /// Either way `refreshLoop` differences over the actual elapsed interval,
     /// so the rates, and the byte totals integrated from them, stay exact at
     /// any cadence. Only the peak-rate columns lose within-bucket detail.
-    static func paceSleep(
-        afterRunTaking elapsed: TimeInterval, interactive: Bool
-    ) -> TimeInterval {
-        if interactive { return max(0, interactiveRefreshInterval - elapsed) }
-        return max(backgroundRefreshInterval - elapsed, 2 * elapsed)
+    static func paceSleep(afterRunTaking elapsed: TimeInterval, pace: Pace) -> TimeInterval {
+        switch pace {
+        case .live, .display: return max(0, pace.refreshFloor - elapsed)
+        case .background: return max(pace.refreshFloor - elapsed, 2 * elapsed)
+        }
     }
 
-    /// Signals the pause as well as guarding state, so promoting the reader to
-    /// interactive cuts a background pause short instead of leaving a freshly
-    /// opened panel waiting out the rest of it.
+    /// Signals the pause as well as guarding state, so speeding the reader up
+    /// cuts a longer pause short instead of leaving a freshly opened panel
+    /// waiting out the rest of it.
     private let lock = NSCondition()
     private var wantRunning = false
-    private var interactive = false
-    /// Set when a pause should end early (a mode promotion, or `stop()`).
+    private var pace = Pace.background
+    /// Set when a pause should end early (a faster pace, or `stop()`).
     private var wakeEarly = false
     /// Previous cumulative counters and when they were sampled, to difference the
     /// next snapshot into rates.
@@ -112,20 +139,19 @@ public final class NetworkProcessReader {
         lock.unlock()
     }
 
-    /// Tell the reader whether anything is displaying per-app rates right now
-    /// (a per-app surface in the main window, or the network menu bar popover).
-    /// Off, the loop drops to the background cadence, which is all the
+    /// Tell the reader who is displaying per-app rates right now. With nobody,
+    /// the loop drops to the background cadence, which is all the
     /// minute-bucketed history needs. Safe from any queue.
     ///
-    /// Promoting to interactive wakes the loop out of a background pause, so
-    /// opening a panel costs one nettop run rather than up to that pause plus
-    /// one.
-    public func setInteractive(_ interactive: Bool) {
+    /// A faster pace wakes the loop out of its pause, so opening a panel costs
+    /// one nettop run rather than up to that pause plus one.
+    public func setPace(_ pace: Pace) {
         lock.lock()
         defer { lock.unlock() }
-        guard interactive != self.interactive else { return }
-        self.interactive = interactive
-        if interactive {
+        guard pace != self.pace else { return }
+        let faster = pace.refreshFloor < self.pace.refreshFloor
+        self.pace = pace
+        if faster {
             wakeEarly = true
             lock.broadcast()
         }
@@ -155,8 +181,8 @@ public final class NetworkProcessReader {
 
     // MARK: - Background refresh
 
-    /// Wait out `duration`, returning early when `setInteractive(true)` or
-    /// `stop()` asks for it. `NSCondition.wait(until:)` can also return
+    /// Wait out `duration`, returning early when a faster `setPace` or `stop()`
+    /// asks for it. `NSCondition.wait(until:)` can also return
     /// spuriously, so the deadline is rechecked rather than trusted.
     private func pause(for duration: TimeInterval) {
         guard duration > 0 else { return }
@@ -209,11 +235,10 @@ public final class NetworkProcessReader {
             prevAt = runAt
             lock.unlock()
 
-            // Two-speed pacing: the display cadence while someone is looking,
-            // the history cadence otherwise.
+            // The cadence of whoever is looking, or the history's if nobody is.
             let elapsed = Date().timeIntervalSince(runAt)
             lock.lock()
-            let pause = Self.paceSleep(afterRunTaking: elapsed, interactive: interactive)
+            let pause = Self.paceSleep(afterRunTaking: elapsed, pace: pace)
             lock.unlock()
             self.pause(for: pause)
         }
