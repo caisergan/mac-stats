@@ -330,7 +330,9 @@ struct NetworkView: View {
                     Text("No app network activity right now.")
                         .font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
                 } else {
-                    let maxRate = max(top.first?.networkBytesPerSec ?? 1, 1)
+                    // The list is ranked by a short average, so the top row need
+                    // not hold the highest current rate.
+                    let maxRate = max(top.map(\.networkBytesPerSec).max() ?? 1, 1)
                     ForEach(top) { process in
                         appRow(process, maxRate: maxRate)
                     }

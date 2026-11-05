@@ -785,7 +785,7 @@ final class SamplerModel: ObservableObject {
             // A freshly installed reader starts at the background cadence, so
             // forget what the last one was told or the next tick would see no
             // change and leave a visible panel on the slow pace.
-            self.networkReaderInteractive = false
+            self.networkReaderPace = .background
             self.scanQueue.async {
                 self.sampler.setNetworkProcessReader(enabled ? NetworkProcessReader() : nil)
             }
@@ -795,25 +795,37 @@ final class SamplerModel: ObservableObject {
         }
     }
 
-    /// What the per-app network reader was last told about whether anything is
-    /// displaying its rates. Confined to `queue`.
-    private var networkReaderInteractive = false
+    /// What the per-app network reader was last told about who is displaying
+    /// its rates. Confined to `queue`.
+    private var networkReaderPace = NetworkProcessReader.Pace.background
 
-    /// Pace the per-app network reader for whoever is watching. The reader
-    /// exists whenever tracking is on, because the per-app byte history needs
-    /// it, but the five-second display cadence only earns its process-spawn
-    /// churn while a surface is actually showing those rates: the network menu
-    /// bar popover, or anything in the main window consuming the process list
-    /// (the Network tab's top-apps card, the process table). With nothing open
-    /// the reader feeds only the history, which is bucketed to the minute, so
-    /// it drops to the background cadence. Runs on `queue`.
+    /// The pace the per-app network reader should run at. It exists whenever
+    /// tracking is on, because the per-app byte history needs it, but its faster
+    /// cadences only earn their process-spawn churn while a surface is actually
+    /// showing those rates. The panel's Network tab gets the live one: everything
+    /// else on it moves at 1 Hz, and it closes soon enough that the spawns stay
+    /// bounded. Anything in the main window consuming the process list (the
+    /// Network tab's top-apps card, the process table) can be left open all day,
+    /// so it gets the display one. With neither open the reader feeds only the
+    /// history, which is bucketed to the minute.
+    static func networkReaderPace(
+        trackingEnabled: Bool, networkPanelOpen: Bool, processConsumers: Int
+    ) -> NetworkProcessReader.Pace {
+        guard trackingEnabled else { return .background }
+        if networkPanelOpen { return .live }
+        return processConsumers > 0 ? .display : .background
+    }
+
+    /// Pace the per-app network reader for whoever is watching. Runs on `queue`.
     private func updateNetworkReaderPacing(openPopoverKinds: Set<MenuListKind>) {
-        let interactive =
-            perAppNetworkEnabled && (processConsumers > 0 || openPopoverKinds.contains(.network))
-        guard interactive != networkReaderInteractive else { return }
-        networkReaderInteractive = interactive
+        let pace = Self.networkReaderPace(
+            trackingEnabled: perAppNetworkEnabled,
+            networkPanelOpen: openPopoverKinds.contains(.network),
+            processConsumers: processConsumers)
+        guard pace != networkReaderPace else { return }
+        networkReaderPace = pace
         scanQueue.async { [weak self] in
-            self?.sampler.setNetworkProcessInteractive(interactive)
+            self?.sampler.setNetworkProcessPace(pace)
         }
     }
 
@@ -1891,21 +1903,15 @@ final class SamplerModel: ObservableObject {
                 .energy, with: Self.topApps(processes, limit: menuListLimit) { $0.energyImpact })
         }
         if kinds.contains(.network) {
-            // Per-app network: only when the opt-in reader is feeding data. Skip
-            // the sort entirely when nothing has any throughput so an idle network
-            // does not surface a meaningless list of zeros.
-            let netActive = processes.contains { $0.networkBytesPerSec > 0 }
-            menuLists.update(
-                .network,
-                with: netActive
-                    ? Array(
-                        processes.sorted { $0.networkBytesPerSec > $1.networkBytesPerSec }
-                            .prefix(menuListLimit))
-                    : [])
-            menuLists.updateApps(
-                .network,
-                with: netActive
-                    ? Self.topApps(processes, limit: menuListLimit) { $0.networkBytesPerSec } : [])
+            // Per-app network: only when the opt-in reader is feeding data.
+            let recent = processes.reduce(into: [ProcessIdentity: Double]()) { map, process in
+                map[process.id] =
+                    processTrails[process.id].flatMap { Self.recentNetworkRate(in: $0) }
+                    ?? process.networkBytesPerSec
+            }
+            let ranked = Self.rankedNetwork(processes, recentRates: recent, limit: menuListLimit)
+            menuLists.update(.network, with: ranked.processes)
+            menuLists.updateApps(.network, with: ranked.apps)
         }
         if kinds.contains(.disk) {
             menuLists.update(
@@ -1945,6 +1951,28 @@ final class SamplerModel: ObservableObject {
             addGPUWorkloads(apps.flatMap(\.processes))
             menuLists.updateApps(.gpu, with: apps)
         }
+    }
+
+    /// The network lists: ranked by each process's ~5 s average but showing its
+    /// current rate, so the figures are live while the order holds still. Network
+    /// traffic is bursty enough that ranking on the current second alone swapped
+    /// the top row in 23 seconds of a measured quiet minute, and a second with no
+    /// traffic at all would blank the list. Both lists are empty only once
+    /// nothing has moved for the whole window, so an idle network does not
+    /// surface a meaningless list of zeros. Ties fall to the pid to keep the
+    /// silent rows from trading places.
+    static func rankedNetwork(
+        _ processes: [ProcessSample], recentRates: [ProcessIdentity: Double], limit: Int
+    ) -> (processes: [ProcessSample], apps: [AppProcessGroup]) {
+        let recent = { (process: ProcessSample) in recentRates[process.id] ?? 0 }
+        guard processes.contains(where: { recent($0) > 0 }) else { return ([], []) }
+        let ranked = Array(
+            processes.sorted {
+                let lhs = recent($0)
+                let rhs = recent($1)
+                return lhs != rhs ? lhs > rhs : $0.pid < $1.pid
+            }.prefix(limit))
+        return (ranked, topApps(processes, limit: limit, value: recent))
     }
 
     /// The `limit` apps with the highest total `value`, each with its members
@@ -2010,6 +2038,25 @@ final class SamplerModel: ObservableObject {
         var sum = 0.0
         for i in (trail.count - n)..<trail.count { sum += trail[i].cpuPercent }
         return sum / Double(n)
+    }
+
+    /// A process's mean network rate over the trailing `window` seconds of its
+    /// trail. The window is measured on the trail's own dates, not as a count of
+    /// points like `processSmoothingPoints`, because that count assumes the 5 s
+    /// table cadence and spans only ~2 s while an open panel scans at 1 Hz. Nil
+    /// for an empty trail.
+    static func recentNetworkRate(
+        in trail: [ProcessHistoryPoint], window: TimeInterval = 5
+    ) -> Double? {
+        guard let newest = trail.last?.date else { return nil }
+        var sum = 0.0
+        var count = 0
+        for point in trail.reversed() {
+            guard newest.timeIntervalSince(point.date) < window else { break }
+            sum += point.networkBytesPerSec
+            count += 1
+        }
+        return sum / Double(count)
     }
 
     /// The smoothed CPU for every process in one pass, keyed by identity, so the

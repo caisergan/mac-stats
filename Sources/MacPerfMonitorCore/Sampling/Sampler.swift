@@ -255,12 +255,12 @@ public final class Sampler {
         reader?.start()
     }
 
-    /// Tell the per-app network reader whether anything is displaying its rates,
-    /// so it can pace itself for a visible read-out or for the minute-bucketed
-    /// history. Call on the same queue as `setNetworkProcessReader`, which owns
-    /// the reference; the flag itself is guarded by the reader's own lock.
-    public func setNetworkProcessInteractive(_ interactive: Bool) {
-        networkProcessReader?.setInteractive(interactive)
+    /// Tell the per-app network reader who is displaying its rates, so it can
+    /// pace itself for a visible read-out or for the minute-bucketed history.
+    /// Call on the same queue as `setNetworkProcessReader`, which owns the
+    /// reference; the pace itself is guarded by the reader's own lock.
+    public func setNetworkProcessPace(_ pace: NetworkProcessReader.Pace) {
+        networkProcessReader?.setPace(pace)
     }
 
     /// Take the per-interface bytes accumulated since the last call, for the

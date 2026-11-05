@@ -267,20 +267,35 @@ final class NetworkTests: XCTestCase {
 
     // MARK: - nettop pacing
 
-    /// Interactive pacing buys freshness with spawns: the floor's remainder and
+    /// The live pace is what makes the panel's list move with the rest of the
+    /// panel: a typical run sleeps out to one reading a second, and a run slower
+    /// than that lands readings as fast as nettop can produce them.
+    func testLivePaceSleepTargetsOneReadingASecond() {
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, pace: .live), 0.98,
+            accuracy: 0.001)
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 0, pace: .live), 1,
+            accuracy: 0.001)
+        XCTAssertEqual(
+            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, pace: .live), 0,
+            accuracy: 0.001)
+    }
+
+    /// Display pacing buys freshness with spawns: the floor's remainder and
     /// nothing more, so the measured ~5 s run lands a reading every 5 s.
-    func testInteractivePaceSleepTargetsTheDisplayCadence() {
+    func testDisplayPaceSleepTargetsTheDisplayCadence() {
         // Fast machine: a 20 ms run sleeps out to the 5 s floor.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, interactive: true), 4.98,
+            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, pace: .display), 4.98,
             accuracy: 0.001)
         // Degenerate elapsed still pauses the full floor.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 0, interactive: true), 5,
+            NetworkProcessReader.paceSleep(afterRunTaking: 0, pace: .display), 5,
             accuracy: 0.001)
         // A run at the floor does not pause: the reading lands every 5 s.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, interactive: true), 0,
+            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, pace: .display), 0,
             accuracy: 0.001)
     }
 
@@ -290,16 +305,16 @@ final class NetworkTests: XCTestCase {
     /// duration so nettop occupies at most ~1/3 of wall time.
     func testBackgroundPaceSleepFloorsFastRunsAndStretchesSlowOnes() {
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, interactive: false), 29.98,
+            NetworkProcessReader.paceSleep(afterRunTaking: 0.02, pace: .background), 29.98,
             accuracy: 0.001)
         // The measured ~5 s run gives a 30 s cycle, six times fewer spawns than
         // running it back-to-back.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, interactive: false), 24.9,
+            NetworkProcessReader.paceSleep(afterRunTaking: 5.1, pace: .background), 24.9,
             accuracy: 0.001)
         // Past 10 s the adaptive term takes over from the floor.
         XCTAssertEqual(
-            NetworkProcessReader.paceSleep(afterRunTaking: 17, interactive: false), 34,
+            NetworkProcessReader.paceSleep(afterRunTaking: 17, pace: .background), 34,
             accuracy: 0.001)
     }
 
